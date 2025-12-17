@@ -13,16 +13,39 @@ type RecommendedDoc = {
   url: string | null;
 };
 
+/* ---------------------------------------------
+   Helpers
+--------------------------------------------- */
+
 function normalize(s: string) {
   return (s || "").toLowerCase().trim();
 }
 
+function getBaseUrl(req: Request) {
+  const host =
+    req.headers.get("x-forwarded-host") ??
+    req.headers.get("host");
+
+  const proto =
+    req.headers.get("x-forwarded-proto") ?? "http";
+
+  if (!host) throw new Error("Missing host header");
+
+  return `${proto}://${host}`;
+}
+
+/* ---------------------------------------------
+   Folder detection (anchors + solutions)
+--------------------------------------------- */
+
 function detectFolders(message: string) {
   const m = normalize(message);
 
+  // Detect anchor series (u2400, u2600, etc.)
   const uMatch = m.match(/\bu(\d{4})\b/);
   const uSeries = uMatch ? `u${uMatch[1]}` : null;
 
+  // Membrane / variant detection
   const variants = [
     { key: "epdm", hits: ["epdm"] },
     { key: "kee", hits: ["kee"] },
@@ -30,19 +53,20 @@ function detectFolders(message: string) {
     { key: "tpo", hits: ["tpo"] },
     { key: "app", hits: ["app"] },
     { key: "sbs", hits: ["sbs"] },
-    { key: "sbs-torch", hits: ["torch", "sbs torch", "sbs-torch"] },
+    { key: "sbs-torch", hits: ["torch", "sbs torch"] },
     { key: "coatings", hits: ["coating", "coatings"] },
     { key: "plate", hits: ["plate"] },
   ];
 
   const variant =
-    variants.find((v) => v.hits.some((h) => m.includes(h)))?.key || null;
+    variants.find(v => v.hits.some(h => m.includes(h)))?.key ?? null;
 
-  const solutionHints: Array<{ key: string; hits: string[] }> = [
+  // Solution detection
+  const solutions = [
     { key: "solutions/hvac", hits: ["hvac", "rtu"] },
+    { key: "solutions/satellite-dish", hits: ["satellite", "dish"] },
     { key: "solutions/snow-retention/2pipe", hits: ["2pipe", "two pipe"] },
     { key: "solutions/snow-retention/snow-fence", hits: ["snow fence"] },
-    { key: "solutions/satellite-dish", hits: ["satellite", "dish"] },
     { key: "solutions/roof-guardrail", hits: ["guardrail"] },
     { key: "solutions/roof-ladder", hits: ["roof ladder", "ladder"] },
     { key: "solutions/roof-box", hits: ["roof box"] },
@@ -51,109 +75,145 @@ function detectFolders(message: string) {
   ];
 
   const solutionFolder =
-    solutionHints.find((s) => s.hits.some((h) => m.includes(h)))?.key || null;
+    solutions.find(s => s.hits.some(h => m.includes(h)))?.key ?? null;
 
+  // Anchor folder
   let anchorFolder: string | null = null;
-  if (uSeries && variant) anchorFolder = `anchor/u-anchors/${uSeries}/${variant}`;
-  else if (uSeries) anchorFolder = `anchor/u-anchors/${uSeries}`;
+  if (uSeries && variant) {
+    anchorFolder = `anchor/u-anchors/${uSeries}/${variant}`;
+  } else if (uSeries) {
+    anchorFolder = `anchor/u-anchors/${uSeries}`;
+  }
 
   return [anchorFolder, solutionFolder].filter(Boolean).slice(0, 2) as string[];
 }
 
-async function getDocsForFolder(folder: string) {
-  const baseUrl =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    `http://localhost:${process.env.PORT || 3000}`;
+/* ---------------------------------------------
+   Fetch docs from /api/docs (server-safe)
+--------------------------------------------- */
 
-  const res = await fetch(
-    `${baseUrl}/api/docs?folder=${encodeURIComponent(folder)}`,
-    { cache: "no-store" }
-  );
+async function getDocsForFolder(req: Request, folder: string) {
+  const baseUrl = getBaseUrl(req);
+  const url = new URL("/api/docs", baseUrl);
+  url.searchParams.set("folder", folder);
 
+  const res = await fetch(url.toString(), { cache: "no-store" });
   if (!res.ok) return [];
 
   const json = await res.json();
   return (json?.files || []) as RecommendedDoc[];
 }
 
+/* ---------------------------------------------
+   POST
+--------------------------------------------- */
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
     const message = (body?.message || "").trim();
-    const userType: UserType = body?.userType === "external" ? "external" : "internal";
+    const userType: UserType =
+      body?.userType === "external" ? "external" : "internal";
 
     if (!message) {
       return NextResponse.json({ error: "Missing message" }, { status: 400 });
     }
 
     if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ error: "Missing OPENAI_API_KEY" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Missing OPENAI_API_KEY" },
+        { status: 500 }
+      );
     }
 
+    /* Detect folders + pull docs */
     const folders = detectFolders(message);
+    const folderDocs = await Promise.all(
+      folders.map(folder => getDocsForFolder(req, folder))
+    );
 
-    const folderDocs = await Promise.all(folders.map(getDocsForFolder));
     const recommendedDocs = folderDocs.flat().slice(0, 10);
 
     const docContext =
       recommendedDocs.length > 0
         ? recommendedDocs
-            .map((d) => `- ${d.doc_type}: ${d.title} (${d.path})${d.url ? ` [${d.url}]` : ""}`)
+            .map(
+              d =>
+                `- ${d.doc_type}: ${d.title} (${d.path})${
+                  d.url ? ` [${d.url}]` : ""
+                }`
+            )
             .join("\n")
-        : "- (No documents matched yet)";
+        : "- None matched yet.";
 
-    const system = `
+    /* Prompt */
+    const systemPrompt = `
 You are "Anchor Sales Co-Pilot" — an expert Sales Engineer for Anchor Products.
 
-Hard rules:
+Rules:
 - Do NOT fabricate specs, approvals, compatibility, or install steps.
-- If info is missing, ask at most 2 clarifying questions.
-- Keep it short, confident, and sales-ready.
-- You MUST follow the response format exactly (below).
-- You MUST end with "Recommended documents" and only list docs provided in the document list.
+- Ask at most 2 clarifying questions if required.
+- Be concise, confident, and sales-ready.
+- Follow the response format exactly.
+- End with "Recommended documents" using ONLY the provided list.
 
 Visibility:
-- External: no competitor comparisons/details.
-- Internal: competitor comparisons only if sources are provided (otherwise say you need sources).
+- External users: no competitor comparisons.
+- Internal users: competitor comparisons only with provided sources.
 
-Response format (use these headings exactly):
+Response format:
+
 Recommendation:
-- (1–2 bullets)
+- ...
 
 Why:
-- (1–3 bullets)
+- ...
 
 Need to confirm:
-- (0–3 bullets; only if needed)
+- ...
 
 Quick questions:
 1) ...
 2) ...
 
 Recommended documents:
-- (list doc titles + doc_type; if none matched, say “None matched yet.”)
+- ...
 
-Provided documents (signed links):
+Provided documents:
 ${docContext}
 `.trim();
 
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+
     const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 
     const resp = await client.responses.create({
       model,
       input: [
-        { role: "system", content: system },
-        { role: "user", content: `userType=${userType}\n\nQuestion:\n${message}` },
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: `userType=${userType}\n\nQuestion:\n${message}`,
+        },
       ],
     });
 
-    const answer = resp.output_text || "I couldn’t generate a response. Please try again.";
+    const answer =
+      resp.output_text ??
+      "I couldn’t generate a response. Please try again.";
 
-    return NextResponse.json({ answer, foldersUsed: folders, recommendedDocs });
+    return NextResponse.json({
+      answer,
+      foldersUsed: folders,
+      recommendedDocs,
+    });
   } catch (err: any) {
     console.error("CHAT_ROUTE_ERROR:", err);
-    return NextResponse.json({ error: err?.message || "Server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Server error" },
+      { status: 500 }
+    );
   }
 }
