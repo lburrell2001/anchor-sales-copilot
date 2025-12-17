@@ -1,26 +1,122 @@
 @import "tailwindcss";
 
+/* =========================
+   AnchorP LMS Theme Tokens
+========================= */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Core */
+  --bg: #06080b;
+  --panel: rgba(255, 255, 255, 0.06);
+  --panel-2: rgba(0, 0, 0, 0.35);
+  --border: rgba(255, 255, 255, 0.10);
+  --border-2: rgba(255, 255, 255, 0.14);
+
+  --text: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.62);
+  --muted-2: rgba(255, 255, 255, 0.45);
+
+  /* Anchor green accent */
+  --accent: #22c55e;     /* green */
+  --accent-2: #34d399;   /* emerald */
+  --accent-3: #a3e635;   /* lime */
+
+  /* App feel */
+  --radius: 14px;
+  --radius-sm: 10px;
+
+  /* Shadows */
+  --shadow: 0 12px 50px rgba(0,0,0,0.55);
+  --ring: 0 0 0 1px rgba(255,255,255,0.06);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
+  background: var(--bg);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  color: var(--text);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* remove iOS tap flash */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* =========================
+   AnchorP UI Building Blocks
+========================= */
+.anchor-app-bg {
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(34, 197, 94, 0.18), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(52, 211, 153, 0.14), transparent 55%),
+    linear-gradient(to bottom, #050607, #06080b 55%, #040404);
+}
+
+.anchor-topbar {
+  background: rgba(0,0,0,0.40);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+
+.anchor-card {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--ring);
+  backdrop-filter: blur(10px);
+}
+
+.anchor-card-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.anchor-chip {
+  border: 1px solid rgba(34,197,94,0.25);
+  background: rgba(34,197,94,0.12);
+  color: rgba(167,243,208,0.95);
+  border-radius: 999px;
+}
+
+.anchor-btn {
+  border-radius: 10px;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent-3));
+  color: #08110b;
+  box-shadow: 0 10px 30px rgba(34,197,94,0.18);
+}
+
+.anchor-btn:disabled {
+  opacity: 0.55;
+}
+
+.anchor-input {
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.45);
+  border-radius: 12px;
+  color: var(--text);
+  outline: none;
+}
+
+.anchor-input::placeholder {
+  color: rgba(255,255,255,0.35);
+}
+
+.anchor-input:focus {
+  border-color: rgba(52,211,153,0.35);
+  box-shadow: 0 0 0 3px rgba(34,197,94,0.12);
+}
+
+.anchor-msg-user {
+  border: 1px solid rgba(34,197,94,0.22);
+  background: rgba(34,197,94,0.12);
+  border-radius: 14px;
+}
+
+.anchor-msg-ai {
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.35);
+  border-radius: 14px;
 }
