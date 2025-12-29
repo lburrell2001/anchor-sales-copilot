@@ -93,7 +93,7 @@ function LoginInner() {
       if (error) throw error;
 
       setOtpSent(true);
-      setMsg("Enter the 6-digit code from your email.");
+      setMsg("Enter the 8-digit code from your email.");
     } catch (err: any) {
       setMsg(err?.message || "Couldn’t send code. Try again.");
     } finally {
@@ -145,7 +145,7 @@ function LoginInner() {
 
           <h1 className="mt-6 text-2xl font-semibold tracking-tight">Sign in</h1>
           <p className="mt-2 text-sm text-white/60">
-            We’ll email you a secure 6-digit code. Fast, simple, mobile-ready.
+            We’ll email you a secure 8-digit code. Fast, simple, mobile-ready.
           </p>
         </div>
 
@@ -165,7 +165,7 @@ function LoginInner() {
 
           {!otpSent ? (
             <div className="mt-3 flex items-center justify-between">
-              <div className="text-xs text-white/60">We’ll send a 6-digit code.</div>
+              <div className="text-xs text-white/60">We’ll send a 8-digit code.</div>
               <Link
                 href="/signup"
                 className="text-xs text-emerald-200 hover:text-emerald-100 underline-offset-4 hover:underline"
@@ -175,13 +175,13 @@ function LoginInner() {
             </div>
           ) : (
             <>
-              <label className="mt-4 block text-xs font-semibold text-white/70">6-digit code</label>
+              <label className="mt-4 block text-xs font-semibold text-white/70">8-digit code</label>
               <input
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                placeholder="123456"
+                placeholder="12345678"
                 className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-base outline-none placeholder:text-white/35 focus:border-emerald-300/30"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") verifyCode();

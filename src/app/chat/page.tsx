@@ -60,44 +60,77 @@ export default function ChatPage() {
 
   // ✅ Load user + profile once (role + user_type)
   useEffect(() => {
-    let alive = true;
+  let alive = true;
 
-    (async () => {
-      try {
-        const { data: userData } = await supabase.auth.getUser();
-        if (!alive) return;
+  (async () => {
+    try {
+      // 1) Confirm user session
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (!alive) return;
 
-        const user = userData.user;
-        if (!user) {
-          router.replace("/");
-          return;
-        }
+      if (userErr) console.error("AUTH_GET_USER_ERROR:", userErr);
 
-        const { data: profile, error } = await supabase
+      const user = userData.user;
+      if (!user) {
+        router.replace("/");
+        return;
+      }
+
+      // 2) Try read profile
+      let { data: profile, error: profileErr } = await supabase
+        .from("profiles")
+        .select("role,user_type,email")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!alive) return;
+
+      if (profileErr) console.error("PROFILE_READ_ERROR:", profileErr);
+
+      // 3) If missing, self-heal: create profile based on email domain
+      if (!profile) {
+        const email = (user.email || "").trim().toLowerCase();
+        const isInternal = email.endsWith("@anchorp.com");
+
+        const user_type: UserType = isInternal ? "internal" : "external";
+        const role = isInternal ? "anchor_rep" : "external_rep";
+
+        const { data: created, error: upsertErr } = await supabase
           .from("profiles")
-          .select("role, user_type")
-          .eq("id", user.id)
+          .upsert(
+            {
+              id: user.id,
+              email,
+              user_type,
+              role,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" }
+          )
+          .select("role,user_type")
           .single();
 
-        if (!alive) return;
+        if (upsertErr) console.error("PROFILE_UPSERT_ERROR:", upsertErr);
 
-        if (error) {
-          // If profile fetch fails, fail safe to external
-          setRole(null);
-          setUserType("external");
-        } else {
-          setRole(profile?.role ?? null);
-          setUserType(profile?.user_type === "external" ? "external" : "internal");
-        }
-      } finally {
-        if (alive) setProfileLoading(false);
+        profile = created ?? null;
       }
-    })();
 
-    return () => {
-      alive = false;
-    };
-  }, [supabase, router]);
+      if (!alive) return;
+
+      // 4) Set UI state
+      setRole(profile?.role ?? null);
+      setUserType((profile?.user_type as UserType) ?? "external");
+    } finally {
+      if (alive) setProfileLoading(false);
+    }
+  })();
+
+  return () => {
+    alive = false;
+  };
+}, [supabase, router]);
+
+
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -126,7 +159,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, userType }),
       });
 
       if (res.status === 401) {
