@@ -44,7 +44,7 @@ function titleFromPath(path: string) {
 }
 
 function isSafeFolder(folder: string) {
-  // block traversal & weird stuff
+  // basic traversal / weird input defense
   if (!folder) return false;
   if (folder.includes("..")) return false;
   if (folder.startsWith("/")) return false;
@@ -52,21 +52,12 @@ function isSafeFolder(folder: string) {
   return true;
 }
 
-// Optional: simple folder access rules.
-// Adjust these prefixes to match how your bucket is structured.
-function folderAllowedForUserType(folder: string, userType: "internal" | "external") {
-  // Example:
-  // - anything under "internal/" is internal-only
-  // - everything else is allowed
-  if (folder.startsWith("internal/")) return userType === "internal";
-  return true;
-}
-
 export async function GET(req: Request) {
+  // ✅ allow Supabase to refresh cookies if needed
   const res = NextResponse.next();
 
   try {
-    // ✅ Auth gate
+    // ✅ Auth gate (any logged-in user for now)
     const supabase = supabaseRoute(req, res);
     const { data: authData, error: authErr } = await supabase.auth.getUser();
     if (authErr) console.error("DOCS_AUTH_ERROR:", authErr);
@@ -87,25 +78,9 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Invalid folder" }, { status: 400 });
     }
 
-    // ✅ Determine user_type from profiles (authoritative)
-    const { data: profile, error: profileErr } = await supabase
-      .from("profiles")
-      .select("user_type")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (profileErr) console.error("DOCS_PROFILE_ERROR:", profileErr);
-
-    const userType = profile?.user_type === "internal" ? "internal" : "external";
-
-    // ✅ Optional enforcement (recommended if you have internal-only folders)
-    if (!folderAllowedForUserType(folder, userType)) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    // ✅ Service role listing/signing (safe because we gated above)
     const bucket = "knowledge";
 
+    // ✅ Service role listing/signing (safe because route is auth-gated)
     const { data, error } = await supabaseAdmin.storage.from(bucket).list(folder, {
       limit: 200,
       offset: 0,
@@ -139,7 +114,6 @@ export async function GET(req: Request) {
       })
     );
 
-    // ✅ Preserve any cookie mutations (rare here, but consistent)
     return NextResponse.json(
       { folder, files: signed },
       { headers: res.headers }

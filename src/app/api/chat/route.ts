@@ -14,6 +14,20 @@ type RecommendedDoc = {
   url: string | null;
 };
 
+type MsgRow = {
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+};
+
+type ProfileRole = "admin" | "anchor_rep" | "external_rep";
+
+type ProfileRow = {
+  email: string | null;
+  user_type: UserType | null;
+  role: ProfileRole | null;
+};
+
 /* ---------------------------------------------
    Helpers
 --------------------------------------------- */
@@ -27,6 +41,14 @@ function getBaseUrl(req: Request) {
   const proto = req.headers.get("x-forwarded-proto") ?? "http";
   if (!host) throw new Error("Missing host header");
   return `${proto}://${host}`;
+}
+
+function deriveAccessFromEmail(emailRaw: string | null | undefined) {
+  const email = (emailRaw || "").trim().toLowerCase();
+  const isInternal = email.endsWith("@anchorp.com");
+  const user_type: UserType = isInternal ? "internal" : "external";
+  const role: ProfileRole = isInternal ? "anchor_rep" : "external_rep";
+  return { email, user_type, role };
 }
 
 /* ---------------------------------------------
@@ -88,15 +110,69 @@ function detectFolders(message: string) {
 --------------------------------------------- */
 
 async function getDocsForFolder(req: Request, folder: string) {
-  const baseUrl = getBaseUrl(req);
-  const url = new URL("/api/docs", baseUrl);
-  url.searchParams.set("folder", folder);
+  try {
+    const baseUrl = getBaseUrl(req);
+    const url = new URL("/api/docs", baseUrl);
+    url.searchParams.set("folder", folder);
 
-  const res = await fetch(url.toString(), { cache: "no-store" });
-  if (!res.ok) return [];
+    const res = await fetch(url.toString(), { cache: "no-store" });
+    if (!res.ok) return [];
 
-  const json = await res.json();
-  return (json?.files || []) as RecommendedDoc[];
+    const json = await res.json().catch(() => ({}));
+    return (json?.files || []) as RecommendedDoc[];
+  } catch {
+    return [];
+  }
+}
+
+/* ---------------------------------------------
+   Conversation helpers
+--------------------------------------------- */
+
+async function ensureConversation(
+  supabase: any,
+  userId: string,
+  conversationId?: string | null
+) {
+  // If client provided a conversationId, verify it belongs to this user
+  if (conversationId) {
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("id", conversationId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!error && data?.id) return data.id as string;
+  }
+
+  // Otherwise create a new one
+  const { data: created, error: createErr } = await supabase
+    .from("conversations")
+    .insert({ user_id: userId, title: "New chat" })
+    .select("id")
+    .single();
+
+  if (createErr) throw createErr;
+  return created.id as string;
+}
+
+async function loadRecentHistory(
+  supabase: any,
+  userId: string,
+  conversationId: string,
+  limit = 12
+): Promise<MsgRow[]> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("role,content,created_at")
+    .eq("user_id", userId)
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  return ((data || []) as MsgRow[]).reverse();
 }
 
 /* ---------------------------------------------
@@ -104,25 +180,14 @@ async function getDocsForFolder(req: Request, folder: string) {
 --------------------------------------------- */
 
 export async function POST(req: Request) {
-  // ✅ create a response object so Supabase can mutate cookies/headers if needed
+  // ✅ Create a response object so Supabase can attach cookie/header changes if needed
   const res = NextResponse.next();
 
   try {
-    // ✅ Auth gate (server-side)
-    // IMPORTANT: supabaseRoute must accept (req, res)
-    const supabase = supabaseRoute(req, res);
-
-    const { data: authData, error: authErr } = await supabase.auth.getUser();
-    if (authErr) console.error("API_CHAT_AUTH_ERROR:", authErr);
-
-    const user = authData.user;
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      
-    }
-
     const body = await req.json().catch(() => ({}));
-    const message = (body?.message || "").trim();
+    const message = (body?.message || "").toString().trim();
+    const conversationIdFromClient =
+      (body?.conversationId || "").toString().trim() || null;
 
     if (!message) {
       return NextResponse.json({ error: "Missing message" }, { status: 400 });
@@ -135,23 +200,28 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Determine access from profiles (ignore any client-provided userType)
+    const supabase = supabaseRoute(req, res);
+
+    // ✅ Auth gate
+    const { data: authData, error: authErr } = await supabase.auth.getUser();
+    if (authErr) console.error("API_CHAT_AUTH_ERROR:", authErr);
+
+    const user = authData.user;
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // ✅ Profile (self-heal)
     let { data: profile, error: profileErr } = await supabase
       .from("profiles")
-      .select("email, user_type, role")
+      .select("email,user_type,role")
       .eq("id", user.id)
-      .maybeSingle();
+      .maybeSingle<ProfileRow>();
 
     if (profileErr) console.error("API_CHAT_PROFILE_SELECT_ERROR:", profileErr);
 
-    // ✅ If profile missing, create one based on email domain
     if (!profile) {
-      const email = (user.email || "").toLowerCase();
-      const user_type: UserType = email.endsWith("@anchorp.com")
-        ? "internal"
-        : "external";
-      const role = user_type === "internal" ? "anchor_rep" : "external_rep";
-
+      const { email, user_type, role } = deriveAccessFromEmail(user.email);
       const { data: created, error: upsertErr } = await supabase
         .from("profiles")
         .upsert(
@@ -164,23 +234,39 @@ export async function POST(req: Request) {
           },
           { onConflict: "id" }
         )
-        .select("email, user_type, role")
-        .single();
+        .select("email,user_type,role")
+        .single<ProfileRow>();
 
       if (upsertErr) console.error("API_CHAT_PROFILE_UPSERT_ERROR:", upsertErr);
-
       profile = created ?? null;
     }
 
     const userType: UserType =
       profile?.user_type === "external" ? "external" : "internal";
 
-    /* Detect folders + pull docs */
+    // ✅ Conversation + history
+    const conversationId = await ensureConversation(
+      supabase,
+      user.id,
+      conversationIdFromClient
+    );
+
+    const history = await loadRecentHistory(supabase, user.id, conversationId, 12);
+
+    // ✅ Persist user message (don’t fail the whole request if insert fails)
+    const { error: userInsertErr } = await supabase.from("messages").insert({
+      user_id: user.id,
+      conversation_id: conversationId,
+      role: "user",
+      content: message,
+    });
+    if (userInsertErr) console.error("MSG_INSERT_USER_ERROR:", userInsertErr);
+
+    // ✅ Docs context
     const folders = detectFolders(message);
     const folderDocs = await Promise.all(
       folders.map((folder) => getDocsForFolder(req, folder))
     );
-
     const recommendedDocs = folderDocs.flat().slice(0, 10);
 
     const docContext =
@@ -188,14 +274,12 @@ export async function POST(req: Request) {
         ? recommendedDocs
             .map(
               (d) =>
-                `- ${d.doc_type}: ${d.title} (${d.path})${
-                  d.url ? ` [${d.url}]` : ""
-                }`
+                `- ${d.doc_type}: ${d.title} (${d.path})${d.url ? ` [${d.url}]` : ""}`
             )
             .join("\n")
         : "- None matched yet.";
 
-    /* Prompt */
+    // ✅ Prompt
     const systemPrompt = `
 You are "Anchor Sales Co-Pilot" — an expert Sales Engineer for Anchor Products.
 
@@ -232,6 +316,12 @@ Provided documents:
 ${docContext}
 `.trim();
 
+    // ✅ Build model input with short memory
+    const memoryBlock =
+      history.length > 0
+        ? history.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n")
+        : "";
+
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 
@@ -239,6 +329,14 @@ ${docContext}
       model,
       input: [
         { role: "system", content: systemPrompt },
+        ...(memoryBlock
+          ? [
+              {
+                role: "user" as const,
+                content: `Conversation so far:\n${memoryBlock}`,
+              },
+            ]
+          : []),
         {
           role: "user",
           content: `userType=${userType}\n\nQuestion:\n${message}`,
@@ -249,9 +347,29 @@ ${docContext}
     const answer =
       resp.output_text ?? "I couldn’t generate a response. Please try again.";
 
-    // ✅ Return JSON, preserving any cookie/header changes from Supabase
+    // ✅ Persist assistant message
+    const { error: asstInsertErr } = await supabase.from("messages").insert({
+      user_id: user.id,
+      conversation_id: conversationId,
+      role: "assistant",
+      content: answer,
+    });
+    if (asstInsertErr) console.error("MSG_INSERT_ASSISTANT_ERROR:", asstInsertErr);
+
+    // ✅ Update conversation title/updated_at
+    const title = (message.slice(0, 48) || "New chat").trim();
+    const { error: convoUpdateErr } = await supabase
+      .from("conversations")
+      .update({ title, updated_at: new Date().toISOString() })
+      .eq("id", conversationId)
+      .eq("user_id", user.id);
+
+    if (convoUpdateErr) console.error("CONVERSATION_UPDATE_ERROR:", convoUpdateErr);
+
+    // ✅ Return JSON + preserve any headers/cookies from Supabase
     return NextResponse.json(
       {
+        conversationId,
         answer,
         foldersUsed: folders,
         recommendedDocs,

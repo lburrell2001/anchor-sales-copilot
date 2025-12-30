@@ -14,6 +14,7 @@ type RecommendedDoc = {
 };
 
 type ChatResponse = {
+  conversationId?: string;
   answer: string;
   foldersUsed?: string[];
   recommendedDocs?: RecommendedDoc[];
@@ -21,6 +22,25 @@ type ChatResponse = {
 };
 
 type Msg = { role: "user" | "assistant"; content: string };
+
+type ProfileRow = {
+  role: "admin" | "anchor_rep" | "external_rep";
+  user_type: UserType;
+  email: string;
+};
+
+type ConversationRow = {
+  id: string;
+  title: string | null;
+  updated_at: string | null;
+  created_at: string | null;
+};
+
+type MessageRow = {
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+};
 
 const QUICK_PICKS: string[] = [
   "U2400 EPDM",
@@ -31,23 +51,36 @@ const QUICK_PICKS: string[] = [
   "Satellite dish",
 ];
 
+const DEFAULT_GREETING: Msg = {
+  role: "assistant",
+  content:
+    "Anchor Sales Co-Pilot ready.\nTell me what you’re mounting and what roof/membrane you’re working with (ex: U2400 EPDM), and I’ll pull the right docs.",
+};
+
+function formatWhen(iso?: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
 
   // ✅ profile-driven access
-  const [role, setRole] = useState<string | null>(null);
+  const [role, setRole] = useState<ProfileRow["role"] | null>(null);
   const [userType, setUserType] = useState<UserType>("external");
   const [profileLoading, setProfileLoading] = useState(true);
 
+  // ✅ per-user chat memory + sidebar
+  const [userId, setUserId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false); // mobile
+
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Msg[]>([
-    {
-      role: "assistant",
-      content:
-        "Anchor Sales Co-Pilot ready.\nTell me what you’re mounting and what roof/membrane you’re working with (ex: U2400 EPDM), and I’ll pull the right docs.",
-    },
-  ]);
+  const [messages, setMessages] = useState<Msg[]>([DEFAULT_GREETING]);
   const [loading, setLoading] = useState(false);
   const [lastDocs, setLastDocs] = useState<RecommendedDoc[]>([]);
   const [lastFolders, setLastFolders] = useState<string[]>([]);
@@ -58,84 +91,191 @@ export default function ChatPage() {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // ✅ Load user + profile once (role + user_type)
-  useEffect(() => {
-  let alive = true;
-
-  (async () => {
+  async function loadConversationMessages(uid: string, cid: string) {
+    setHistoryLoading(true);
     try {
-      // 1) Confirm user session
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (!alive) return;
+      const { data: rows, error: msgErr } = await supabase
+        .from("messages")
+        .select("role,content,created_at")
+        .eq("conversation_id", cid)
+        .eq("user_id", uid)
+        .order("created_at", { ascending: true })
+        .limit(500);
 
-      if (userErr) console.error("AUTH_GET_USER_ERROR:", userErr);
+      if (msgErr) console.error("MESSAGES_LOAD_ERROR:", msgErr);
 
-      const user = userData.user;
-      if (!user) {
-        router.replace("/");
-        return;
+      if (rows && rows.length > 0) {
+        setMessages(rows.map((r: MessageRow) => ({ role: r.role, content: r.content })));
+      } else {
+        setMessages([DEFAULT_GREETING]);
       }
-
-      // 2) Try read profile
-      let { data: profile, error: profileErr } = await supabase
-        .from("profiles")
-        .select("role,user_type")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (!alive) return;
-
-      if (profileErr) console.error("PROFILE_READ_ERROR:", profileErr);
-
-      // 3) If missing, self-heal: create profile based on email domain
-      if (!profile) {
-        const email = (user.email || "").trim().toLowerCase();
-        const isInternal = email.endsWith("@anchorp.com");
-
-        const user_type: UserType = isInternal ? "internal" : "external";
-        const role = isInternal ? "anchor_rep" : "external_rep";
-
-        const { data: created, error: upsertErr } = await supabase
-          .from("profiles")
-          .upsert(
-            {
-              id: user.id,
-              email,
-              user_type,
-              role,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "id" }
-          )
-          .select("role,user_type")
-          .single();
-
-        if (upsertErr) console.error("PROFILE_UPSERT_ERROR:", upsertErr);
-
-        profile = created ?? null;
-      }
-
-      if (!alive) return;
-
-      // 4) Set UI state
-      setRole(profile?.role ?? null);
-      setUserType((profile?.user_type as UserType) ?? "external");
     } finally {
-      if (alive) setProfileLoading(false);
+      setHistoryLoading(false);
     }
-  })();
+  }
 
-  return () => {
-    alive = false;
-  };
-}, [supabase, router]);
+  async function loadConversations(uid: string) {
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("id,title,updated_at,created_at")
+      .eq("user_id", uid)
+      .order("updated_at", { ascending: false })
+      .limit(50);
 
+    if (error) console.error("CONVERSATIONS_LIST_ERROR:", error);
+    setConversations((data || []) as ConversationRow[]);
+    return (data || []) as ConversationRow[];
+  }
 
+  async function createConversation(uid: string) {
+    const { data: createdConv, error } = await supabase
+      .from("conversations")
+      .insert({ user_id: uid, title: "New chat" })
+      .select("id,title,updated_at,created_at")
+      .single();
+
+    if (error) console.error("CONVERSATION_CREATE_ERROR:", error);
+    return (createdConv || null) as ConversationRow | null;
+  }
+
+  // ✅ Load user + profile + conversations + latest messages (first paint)
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        // 1) Confirm user session
+        const { data: userData, error: userErr } = await supabase.auth.getUser();
+        if (!alive) return;
+
+        if (userErr) console.error("AUTH_GET_USER_ERROR:", userErr);
+
+        const user = userData.user;
+        if (!user) {
+          router.replace("/");
+          return;
+        }
+
+        setUserId(user.id);
+
+        // 2) Try read profile
+        let {
+          data: profile,
+          error: profileErr,
+        }: { data: ProfileRow | null; error: any } = await supabase
+          .from("profiles")
+          .select("role,user_type,email")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (!alive) return;
+        if (profileErr) console.error("PROFILE_READ_ERROR:", profileErr);
+
+        // 3) If missing, self-heal: create profile based on email domain
+        if (!profile) {
+          const email = (user.email || "").trim().toLowerCase();
+          const isInternal = email.endsWith("@anchorp.com");
+          const user_type: UserType = isInternal ? "internal" : "external";
+          const roleToSet: ProfileRow["role"] = isInternal ? "anchor_rep" : "external_rep";
+
+          const { data: created, error: upsertErr } = await supabase
+            .from("profiles")
+            .upsert(
+              {
+                id: user.id,
+                email,
+                user_type,
+                role: roleToSet,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "id" }
+            )
+            .select("role,user_type,email")
+            .single();
+
+          if (upsertErr) console.error("PROFILE_UPSERT_ERROR:", upsertErr);
+          profile = (created as ProfileRow) ?? null;
+        }
+
+        if (!alive) return;
+
+        // 4) Set UI state
+        setRole(profile?.role ?? null);
+        setUserType((profile?.user_type as UserType) ?? "external");
+
+        // 5) Load conversation list
+        const list = await loadConversations(user.id);
+        if (!alive) return;
+
+        // 6) Pick latest conversation or create one
+        let cid = list?.[0]?.id ?? null;
+        if (!cid) {
+          const created = await createConversation(user.id);
+          cid = created?.id ?? null;
+
+          // refresh list so sidebar shows it
+          await loadConversations(user.id);
+        }
+
+        if (!alive) return;
+
+        setConversationId(cid);
+
+        // 7) Load messages
+        if (cid) await loadConversationMessages(user.id, cid);
+        else setMessages([DEFAULT_GREETING]);
+      } finally {
+        if (alive) setProfileLoading(false);
+        // historyLoading is managed by loadConversationMessages()
+        if (alive && !conversationId) setHistoryLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase, router]);
 
   async function signOut() {
     await supabase.auth.signOut();
     router.replace("/");
     router.refresh();
+  }
+
+  async function newChat() {
+    if (!userId) return;
+
+    setMessages([DEFAULT_GREETING]);
+    setLastDocs([]);
+    setLastFolders([]);
+    setInput("");
+
+    const created = await createConversation(userId);
+    if (!created?.id) return;
+
+    setConversationId(created.id);
+    setSidebarOpen(false);
+
+    // refresh list + load empty messages
+    await loadConversations(userId);
+    setMessages([DEFAULT_GREETING]);
+  }
+
+  async function switchConversation(cid: string) {
+    if (!userId) return;
+    if (cid === conversationId) {
+      setSidebarOpen(false);
+      return;
+    }
+
+    setConversationId(cid);
+    setLastDocs([]);
+    setLastFolders([]);
+    setInput("");
+    setSidebarOpen(false);
+
+    await loadConversationMessages(userId, cid);
   }
 
   function pushQuickPick(label: string) {
@@ -149,7 +289,8 @@ export default function ChatPage() {
 
   async function send() {
     const text = input.trim();
-    if (!text || loading || profileLoading) return;
+    if (!text || loading || profileLoading || historyLoading) return;
+    if (!conversationId) return;
 
     setMessages((m) => [...m, { role: "user", content: text }]);
     setInput("");
@@ -159,7 +300,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, userType }),
+        body: JSON.stringify({ message: text, userType, conversationId }),
       });
 
       if (res.status === 401) {
@@ -184,12 +325,16 @@ export default function ChatPage() {
         setMessages((m) => [...m, { role: "assistant", content: data.answer }]);
         setLastDocs(data.recommendedDocs || []);
         setLastFolders(data.foldersUsed || []);
+
+        if (data.conversationId && data.conversationId !== conversationId) {
+          setConversationId(data.conversationId);
+        }
+
+        // refresh sidebar order/title after message (server updates updated_at/title)
+        if (userId) await loadConversations(userId);
       }
     } catch (e: any) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: `Network error: ${e?.message || e}` },
-      ]);
+      setMessages((m) => [...m, { role: "assistant", content: `Network error: ${e?.message || e}` }]);
     } finally {
       setLoading(false);
     }
@@ -197,12 +342,26 @@ export default function ChatPage() {
 
   const hasDocs = lastDocs && lastDocs.length > 0;
 
+  const roleLabel =
+    role === "anchor_rep" ? "Anchor Rep" : role === "external_rep" ? "External Rep" : role === "admin" ? "Admin" : "no role";
+
+  const inputDisabled = profileLoading || historyLoading;
+
   return (
     <main className="min-h-screen anchor-app-bg text-white">
       {/* Top Bar */}
-      <header className="sticky top-0 z-20 anchor-topbar">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3">
+      <header className="sticky top-0 z-30 anchor-topbar">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
+            {/* Mobile sidebar toggle */}
+            <button
+              type="button"
+              onClick={() => setSidebarOpen((v) => !v)}
+              className="md:hidden h-9 rounded-md border border-white/10 bg-black/40 px-3 text-[12px] font-semibold text-white/80 hover:bg-black/60 transition"
+            >
+              Menu
+            </button>
+
             <button
               onClick={() => window.location.reload()}
               className="h-9 w-9 rounded-md bg-black/60 border border-white/10 flex items-center justify-center hover:bg-black/80 transition"
@@ -219,11 +378,20 @@ export default function ChatPage() {
             </div>
           </div>
 
-          {/* Role + Sign out */}
+          {/* Role + actions */}
           <div className="flex items-center gap-2">
             <div className="rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-white/70">
-              {profileLoading ? "…" : role ? role.replace("_", " ") : "no role"}
+              {profileLoading ? "…" : roleLabel}
             </div>
+
+            <button
+              type="button"
+              onClick={newChat}
+              className="h-9 rounded-md border border-white/10 bg-black/40 px-3 text-[12px] font-semibold text-white/80 hover:bg-black/60 transition"
+              title="Start a new chat"
+            >
+              New chat
+            </button>
 
             <button
               type="button"
@@ -237,7 +405,74 @@ export default function ChatPage() {
       </header>
 
       {/* Body */}
-      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-4 px-4 py-4 md:grid-cols-[1fr_320px]">
+      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 px-4 py-4 md:grid-cols-[280px_1fr_320px]">
+        {/* Sidebar */}
+        <aside
+          className={[
+            "rounded-xl border border-white/10 bg-white/5 backdrop-blur shadow-[0_0_0_1px_rgba(255,255,255,0.06)]",
+            "md:block",
+            sidebarOpen ? "block" : "hidden md:block",
+          ].join(" ")}
+        >
+          <div className="border-b border-white/10 px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold">Chats</div>
+              <button
+                type="button"
+                onClick={newChat}
+                className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-[11px] text-white/80 hover:bg-black/50 transition"
+              >
+                + New
+              </button>
+            </div>
+            <div className="mt-1 text-[12px] text-white/60">Your recent conversations</div>
+          </div>
+
+          <div className="p-2">
+            {conversations.length === 0 ? (
+              <div className="rounded-lg border border-white/10 bg-black/30 p-3 text-sm text-white/70">
+                No chats yet.
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {conversations.map((c) => {
+                  const active = c.id === conversationId;
+                  const label = (c.title || "New chat").trim();
+                  const when = formatWhen(c.updated_at || c.created_at);
+
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => switchConversation(c.id)}
+                      className={[
+                        "w-full rounded-lg border px-3 py-2 text-left transition",
+                        active
+                          ? "border-emerald-300/25 bg-emerald-400/10"
+                          : "border-white/10 bg-black/20 hover:bg-black/35",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-[12px] font-semibold text-white/90">
+                            {label}
+                          </div>
+                          <div className="text-[11px] text-white/55">{when}</div>
+                        </div>
+                        {active ? (
+                          <div className="shrink-0 rounded-md border border-emerald-300/20 bg-emerald-400/10 px-2 py-1 text-[10px] text-emerald-100">
+                            Active
+                          </div>
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </aside>
+
         {/* Chat */}
         <section className="rounded-xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur">
           <div className="border-b border-white/10 px-4 py-3">
@@ -262,9 +497,9 @@ export default function ChatPage() {
                 </div>
               ))}
 
-              {loading && (
+              {(historyLoading || loading) && (
                 <div className="max-w-[92%] rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white/80">
-                  Thinking…
+                  {historyLoading ? "Loading chat…" : "Thinking…"}
                 </div>
               )}
 
@@ -284,6 +519,7 @@ export default function ChatPage() {
                       type="button"
                       onClick={() => pushQuickPick(label)}
                       className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-3 py-1 text-[12px] text-emerald-100 hover:bg-emerald-400/15"
+                      disabled={inputDisabled}
                     >
                       {label}
                     </button>
@@ -297,17 +533,17 @@ export default function ChatPage() {
               <div className="flex w-full gap-2">
                 <input
                   className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-3 text-sm outline-none placeholder:text-white/40 focus:border-emerald-300/30 disabled:opacity-60"
-                  placeholder={profileLoading ? "Loading your access…" : 'Try: "U3400 PVC sales sheet"'}
+                  placeholder={inputDisabled ? "Loading your chat…" : 'Try: "U3400 PVC sales sheet"'}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  disabled={profileLoading}
+                  disabled={inputDisabled}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") send();
                   }}
                 />
                 <button
                   onClick={send}
-                  disabled={loading || profileLoading}
+                  disabled={loading || inputDisabled}
                   className="shrink-0 rounded-lg bg-gradient-to-r from-emerald-400 to-lime-400 px-5 py-3 text-sm font-semibold text-black shadow disabled:opacity-50"
                   type="button"
                 >
