@@ -208,18 +208,20 @@ export default function ChatPage() {
         if (!alive) return;
 
         // 6) Pick latest conversation or create one
-        let cid = list?.[0]?.id ?? null;
-        if (!cid) {
-          const created = await createConversation(user.id);
-          cid = created?.id ?? null;
+let cid: string | null = list?.[0]?.id ?? null;
 
-          // refresh list so sidebar shows it
-          await loadConversations(user.id);
-        }
+if (!cid) {
+  const created = await createConversation(user.id);
+  cid = created?.id ?? null;
 
-        if (!alive) return;
+  // refresh list so sidebar shows it
+  await loadConversations(user.id);
+}
 
-        setConversationId(cid);
+if (!alive) return;
+
+setConversationId(cid);
+
 
         // 7) Load messages
         if (cid) await loadConversationMessages(user.id, cid);
