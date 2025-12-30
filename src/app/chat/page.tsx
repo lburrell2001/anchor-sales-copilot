@@ -35,7 +35,7 @@ type ConversationRow = {
   title: string | null;
   updated_at: string | null;
   created_at: string | null;
-  deleted_at?: string | null; // ✅ optional if you add soft-delete
+  deleted_at?: string | null;
 };
 
 type MessageRow = {
@@ -70,7 +70,6 @@ function titleOrNew(title?: string | null) {
   return t.length ? t : "New chat";
 }
 
-/** ✅ prevents "Unexpected end of JSON input" */
 async function readJsonSafely<T = any>(res: Response): Promise<T | null> {
   const text = await res.text();
   if (!text) return null;
@@ -85,12 +84,10 @@ export default function ChatPage() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
 
-  // profile-driven access
   const [role, setRole] = useState<ProfileRow["role"] | null>(null);
   const [userType, setUserType] = useState<UserType>("external");
   const [profileLoading, setProfileLoading] = useState(true);
 
-  // per-user chat memory + sidebar
   const [userId, setUserId] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
@@ -137,8 +134,7 @@ export default function ChatPage() {
     },
     [supabase]
   );
-  
-  // ✅ NOW filters soft-deleted conversations (if you add deleted_at)
+
   const loadConversations = useCallback(
     async (uid: string) => {
       setConvoLoading(true);
@@ -147,7 +143,7 @@ export default function ChatPage() {
           .from("conversations")
           .select("id,title,updated_at,created_at,deleted_at")
           .eq("user_id", uid)
-          .is("deleted_at", null) // ✅ ignore deleted chats
+          .is("deleted_at", null)
           .order("updated_at", { ascending: false })
           .limit(50);
 
@@ -197,55 +193,53 @@ export default function ChatPage() {
     [conversationId, loadConversationMessages, userId]
   );
 
-  /* -------------------------------------------------
-     ✅ NEW: Rename + Delete (soft delete) actions
-  ------------------------------------------------- */
-
   const renameConversation = useCallback(
-  async (cid: string, title: string) => {
-    if (!userId) return;
+    async (cid: string, title: string) => {
+      if (!userId) return;
 
-    const trimmed = title.trim();
-    if (!trimmed) return;
+      const trimmed = title.trim();
+      if (!trimmed) return;
 
-    const { error } = await supabase
-      .from("conversations")
-      .update({ title: trimmed, updated_at: new Date().toISOString() })
-      .eq("id", cid)
-      .eq("user_id", userId);
+      const { error } = await supabase
+        .from("conversations")
+        .update({ title: trimmed, updated_at: new Date().toISOString() })
+        .eq("id", cid)
+        .eq("user_id", userId);
 
-    if (error) {
-      console.error("CONVERSATION_RENAME_ERROR:", error.message, error.details);
-      return;
-    }
+      if (error) {
+        console.error("CONVERSATION_RENAME_ERROR:", error);
+        return;
+      }
 
-    await loadConversations(userId);
-  },
-  [supabase, userId, loadConversations]
-);
+      await loadConversations(userId);
+    },
+    [supabase, userId, loadConversations]
+  );
 
-const removeConversation = useCallback(
+  const deleteConversation = useCallback(
   async (cid: string) => {
     if (!userId) return;
 
-    const ok = window.confirm("Delete this chat? This cannot be undone.");
+    const ok = window.confirm("Delete this chat? You can’t undo this.");
     if (!ok) return;
+
+    const now = new Date().toISOString();
 
     const { error } = await supabase
       .from("conversations")
-      .delete()
+      .update({ deleted_at: now, updated_at: now })
       .eq("id", cid)
       .eq("user_id", userId);
 
     if (error) {
-      console.error("CONVERSATION_DELETE_ERROR:", error.message, error.details);
+      console.error("CONVERSATION_DELETE_ERROR:", error);
       return;
     }
 
-    // if deleting active chat, move to next available (or create new)
+    const list = await loadConversations(userId);
+
     if (cid === conversationId) {
-      const refreshed = await loadConversations(userId);
-      const nextId = refreshed?.[0]?.id ?? null;
+      const nextId = list?.[0]?.id ?? null;
 
       if (nextId) {
         setConversationId(nextId);
@@ -255,77 +249,26 @@ const removeConversation = useCallback(
         await loadConversationMessages(userId, nextId);
       } else {
         const created = await createConversation(userId);
-        if (created?.id) {
-          setConversationId(created.id);
-          setMessages([DEFAULT_GREETING]);
-          await loadConversations(userId);
-        }
+        const newId = created?.id ?? null;
+        setConversationId(newId);
+        setMessages([DEFAULT_GREETING]);
+        setLastDocs([]);
+        setLastFolders([]);
+        setInput("");
+        await loadConversations(userId);
       }
-    } else {
-      await loadConversations(userId);
     }
   },
   [
-    conversationId,
-    createConversation,
-    loadConversationMessages,
-    loadConversations,
-    supabase,
     userId,
+    supabase,
+    loadConversations,
+    conversationId,
+    loadConversationMessages,
+    createConversation,
   ]
 );
 
-  const deleteConversation = useCallback(
-    async (cid: string) => {
-      if (!userId) return;
-
-      // soft delete (recommended) — requires conversations.deleted_at column
-      const { error } = await supabase
-        .from("conversations")
-        .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq("id", cid)
-        .eq("user_id", userId);
-
-      if (error) {
-        console.error("CONVERSATION_DELETE_ERROR:", error);
-        return;
-      }
-
-      // refresh list
-      const list = await loadConversations(userId);
-
-      // if we deleted the active chat, switch to the next one or create a new one
-      if (cid === conversationId) {
-        const nextId = list?.[0]?.id ?? null;
-        if (nextId) {
-          setConversationId(nextId);
-          setLastDocs([]);
-          setLastFolders([]);
-          setInput("");
-          await loadConversationMessages(userId, nextId);
-        } else {
-          const created = await createConversation(userId);
-          const newId = created?.id ?? null;
-          setConversationId(newId);
-          setMessages([DEFAULT_GREETING]);
-          setLastDocs([]);
-          setLastFolders([]);
-          setInput("");
-          await loadConversations(userId);
-        }
-      }
-    },
-    [
-      conversationId,
-      createConversation,
-      loadConversationMessages,
-      loadConversations,
-      supabase,
-      userId,
-    ]
-  );
-
-  // ✅ Boot: user + profile + conversations + latest messages
   useEffect(() => {
     let alive = true;
 
@@ -344,7 +287,6 @@ const removeConversation = useCallback(
 
         setUserId(user.id);
 
-        // profile
         let { data: profile, error: profileErr } = await supabase
           .from("profiles")
           .select("role,user_type,email")
@@ -363,7 +305,13 @@ const removeConversation = useCallback(
           const { data: created, error: upsertErr } = await supabase
             .from("profiles")
             .upsert(
-              { id: user.id, email, user_type, role: roleToSet, updated_at: new Date().toISOString() },
+              {
+                id: user.id,
+                email,
+                user_type,
+                role: roleToSet,
+                updated_at: new Date().toISOString(),
+              },
               { onConflict: "id" }
             )
             .select("role,user_type,email")
@@ -378,7 +326,6 @@ const removeConversation = useCallback(
         setRole(profile?.role ?? null);
         setUserType((profile?.user_type as UserType) ?? "external");
 
-        // conversations
         const list = await loadConversations(user.id);
         if (!alive) return;
 
@@ -487,12 +434,11 @@ const removeConversation = useCallback(
       setLastDocs(Array.isArray(data.recommendedDocs) ? data.recommendedDocs : []);
       setLastFolders(Array.isArray(data.foldersUsed) ? data.foldersUsed : []);
 
-      // ✅ Rename logic: first real user message sets the title if it's still "New chat"
+      // auto-title: first real user message sets the title if it's still "New chat"
       const current = conversations.find((c) => c.id === conversationId);
       const currentTitle = (current?.title || "").trim();
       if (!currentTitle || currentTitle.toLowerCase() === "new chat") {
         const nextTitle = text.slice(0, 48).trim() || "New chat";
-        // fire-and-forget (don’t block UI)
         renameConversation(conversationId, nextTitle);
       }
 
@@ -524,7 +470,6 @@ const removeConversation = useCallback(
 
   return (
     <main className="min-h-screen anchor-app-bg text-white">
-      {/* Top Bar */}
       <header className="sticky top-0 z-30 anchor-topbar">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
@@ -577,9 +522,7 @@ const removeConversation = useCallback(
         </div>
       </header>
 
-      {/* Body */}
       <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 px-4 py-4 md:grid-cols-[280px_1fr_320px]">
-        {/* Desktop sidebar */}
         <div className="hidden md:block">
           <ChatSidebar
   conversations={conversations.map((c) => ({
@@ -592,12 +535,11 @@ const removeConversation = useCallback(
   onNewChat={newChat}
   onSelect={switchConversation}
   onRename={renameConversation}
-  onDelete={removeConversation}
+  onDelete={deleteConversation}
 />
 
         </div>
 
-        {/* Mobile sidebar (basic list — optional to add rename/delete later) */}
         {sidebarOpen && (
           <aside className="md:hidden rounded-xl border border-white/10 bg-white/5 backdrop-blur shadow-[0_0_0_1px_rgba(255,255,255,0.06)]">
             <div className="border-b border-white/10 px-4 py-3 flex items-center justify-between">
@@ -637,6 +579,7 @@ const removeConversation = useCallback(
             </div>
           </aside>
         )}
+      
 
         {/* Chat */}
         <section className="rounded-xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur">

@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { supabaseRoute } from "@/lib/supabase/server";
+import { retrieveKnowledge } from "@/lib/knowledge/retrieve";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -310,6 +311,21 @@ export async function POST(req: Request) {
             )
             .join("\n")
         : "- None (insufficient info to match folders).";
+// ✅ Knowledge retrieval (pgvector)
+let knowledgeContext = "- None (no approved knowledge matches).";
+
+try {
+  const chunks = await retrieveKnowledge(supabase, message, { matchCount: 8 });
+
+  if (chunks.length) {
+    knowledgeContext = chunks
+      .slice(0, 6) // keep prompt tight
+      .map((c, i) => `[#${i + 1} | sim ${Number(c.similarity).toFixed(3)}]\n${c.content}`)
+      .join("\n\n");
+  }
+} catch (e) {
+  console.error("KNOWLEDGE_RETRIEVE_ERROR:", e);
+}
 
     // ✅ Prompt (nudges to ask for membrane + series if nothing matched)
     const systemPrompt = `
@@ -353,6 +369,11 @@ Quick questions:
 
 Recommended documents:
 - ...
+Approved knowledge context:
+${knowledgeContext}
+
+Provided documents:
+${docContext}
 
 Provided documents:
 ${docContext}
