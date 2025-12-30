@@ -331,61 +331,82 @@ export default function ChatPage() {
     setInput("");
     setLoading(true);
 
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, userType, conversationId }),
-      });
+   try {
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: text, userType, conversationId }),
+  });
 
-      if (res.status === 401) {
-        router.replace("/");
-        router.refresh();
-        return;
-      }
-
-      const data = await readJsonSafely<ChatResponse>(res);
-
-      if (!res.ok) {
-        const msg = data?.error || `HTTP ${res.status}`;
-        setMessages((m) => [
-          ...m,
-          { role: "assistant", content: `I hit an error.\n\n${msg}` },
-        ]);
-        return;
-      }
-
-      if (!data || data.error || !data.answer) {
-        setMessages((m) => [
-          ...m,
-          {
-            role: "assistant",
-            content:
-              "I hit an error.\n\n" +
-              (data?.error || "Empty/invalid response from server."),
-          },
-        ]);
-        return;
-      }
-
-      setMessages((m) => [...m, { role: "assistant", content: data.answer }]);
-      setLastDocs(data.recommendedDocs || []);
-      setLastFolders(data.foldersUsed || []);
-
-      if (data.conversationId && data.conversationId !== conversationId) {
-        setConversationId(data.conversationId);
-      }
-
-      if (userId) await loadConversations(userId);
-    } catch (e: any) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: `Network error: ${e?.message || e}` },
-      ]);
-    } finally {
-      setLoading(false);
-    }
+  // 🔒 Auth expired
+  if (res.status === 401) {
+    router.replace("/");
+    router.refresh();
+    return;
   }
+
+  const data = await readJsonSafely<ChatResponse>(res);
+
+  // ❌ HTTP-level failure
+  if (!res.ok) {
+    const msg = (data?.error ?? `HTTP ${res.status}`).toString();
+    setMessages((m) => [
+      ...m,
+      {
+        role: "assistant",
+        content: `I hit an error.\n\n${msg}`,
+      },
+    ]);
+    return;
+  }
+
+  // ❌ Missing or invalid payload
+  if (!data || typeof data.answer !== "string" || !data.answer.trim()) {
+    const msg =
+      typeof data?.error === "string"
+        ? data.error
+        : "Empty or invalid response from server.";
+
+    setMessages((m) => [
+      ...m,
+      {
+        role: "assistant",
+        content: `I hit an error.\n\n${msg}`,
+      },
+    ]);
+    return;
+  }
+
+  // ✅ Success path (answer is guaranteed string)
+  const answerText = data.answer.trim();
+
+  setMessages((m) => [
+    ...m,
+    { role: "assistant", content: answerText },
+  ]);
+
+  setLastDocs(Array.isArray(data.recommendedDocs) ? data.recommendedDocs : []);
+  setLastFolders(Array.isArray(data.foldersUsed) ? data.foldersUsed : []);
+
+  if (data.conversationId && data.conversationId !== conversationId) {
+    setConversationId(data.conversationId);
+  }
+
+  if (userId) {
+    await loadConversations(userId);
+  }
+} catch (e: any) {
+  setMessages((m) => [
+    ...m,
+    {
+      role: "assistant",
+      content: `Network error: ${e?.message || String(e)}`,
+    },
+  ]);
+} finally {
+  setLoading(false);
+}
+
 
   const hasDocs = lastDocs && lastDocs.length > 0;
 
