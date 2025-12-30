@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/browser";
-import ChatSidebar from "@/app/components/ChatSidebar"; // ✅ adjust path if needed
+import ChatSidebar from "@/app/components/ChatSidebar";
 
 type UserType = "internal" | "external";
 
@@ -71,13 +71,11 @@ function titleOrNew(title?: string | null) {
 
 /** ✅ prevents "Unexpected end of JSON input" */
 async function readJsonSafely<T = any>(res: Response): Promise<T | null> {
-  const text = await res.text(); // read once
+  const text = await res.text();
   if (!text) return null;
-
   try {
     return JSON.parse(text) as T;
   } catch {
-    // Not JSON (could be HTML error page)
     throw new Error(`Non-JSON response (${res.status}): ${text.slice(0, 200)}`);
   }
 }
@@ -99,7 +97,7 @@ export default function ChatPage() {
   const [convoLoading, setConvoLoading] = useState(true);
 
   const [historyLoading, setHistoryLoading] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(false); // mobile
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([DEFAULT_GREETING]);
@@ -128,9 +126,7 @@ export default function ChatPage() {
         if (msgErr) console.error("MESSAGES_LOAD_ERROR:", msgErr);
 
         if (rows && rows.length > 0) {
-          setMessages(
-            rows.map((r: MessageRow) => ({ role: r.role, content: r.content }))
-          );
+          setMessages(rows.map((r: MessageRow) => ({ role: r.role, content: r.content })));
         } else {
           setMessages([DEFAULT_GREETING]);
         }
@@ -198,7 +194,7 @@ export default function ChatPage() {
     [conversationId, loadConversationMessages, userId]
   );
 
-  // Load user + profile + conversations + latest messages
+  // ✅ Boot: user + profile + conversations + latest messages
   useEffect(() => {
     let alive = true;
 
@@ -231,20 +227,12 @@ export default function ChatPage() {
           const email = (user.email || "").trim().toLowerCase();
           const isInternal = email.endsWith("@anchorp.com");
           const user_type: UserType = isInternal ? "internal" : "external";
-          const roleToSet: ProfileRow["role"] = isInternal
-            ? "anchor_rep"
-            : "external_rep";
+          const roleToSet: ProfileRow["role"] = isInternal ? "anchor_rep" : "external_rep";
 
           const { data: created, error: upsertErr } = await supabase
             .from("profiles")
             .upsert(
-              {
-                id: user.id,
-                email,
-                user_type,
-                role: roleToSet,
-                updated_at: new Date().toISOString(),
-              },
+              { id: user.id, email, user_type, role: roleToSet, updated_at: new Date().toISOString() },
               { onConflict: "id" }
             )
             .select("role,user_type,email")
@@ -279,6 +267,8 @@ export default function ChatPage() {
       } finally {
         if (!alive) return;
         setProfileLoading(false);
+        // NOTE: loadConversationMessages handles historyLoading itself.
+        // We force it false here only as a safety in case boot fails before loadConversationMessages runs.
         setHistoryLoading(false);
       }
     })();
@@ -321,94 +311,76 @@ export default function ChatPage() {
     });
   }
 
+  // ✅ explicit readiness so send() actually runs
+  const ready = !profileLoading && !historyLoading && !!userId && !!conversationId;
+  const inputDisabled = !ready;
+
   async function send() {
     const text = input.trim();
-    if (!text || loading || profileLoading || historyLoading) return;
-    if (!conversationId) return;
+
+    // ✅ don’t let loading flags deadlock the app
+    if (!text || loading) return;
+    if (!userId || !conversationId) return;
+    if (profileLoading || historyLoading) return;
 
     // optimistic user message
     setMessages((m) => [...m, { role: "user", content: text }]);
     setInput("");
     setLoading(true);
 
-   try {
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: text, userType, conversationId }),
-  });
+    try {
+      // TEMP debug: confirm this is firing (remove later)
+      // console.log("SEND()", { text, userId, conversationId, userType });
 
-  // 🔒 Auth expired
-  if (res.status === 401) {
-    router.replace("/");
-    router.refresh();
-    return;
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, userType, conversationId }),
+      });
+
+      if (res.status === 401) {
+        router.replace("/");
+        router.refresh();
+        return;
+      }
+
+      const data = await readJsonSafely<ChatResponse>(res);
+
+      if (!res.ok) {
+        const msg = (data?.error ?? `HTTP ${res.status}`).toString();
+        setMessages((m) => [...m, { role: "assistant", content: `I hit an error.\n\n${msg}` }]);
+        return;
+      }
+
+      if (!data || typeof data.answer !== "string" || !data.answer.trim()) {
+        const msg =
+          typeof data?.error === "string" ? data.error : "Empty or invalid response from server.";
+        setMessages((m) => [...m, { role: "assistant", content: `I hit an error.\n\n${msg}` }]);
+        return;
+      }
+
+      const answerText = data.answer.trim();
+      setMessages((m) => [...m, { role: "assistant", content: answerText }]);
+
+      setLastDocs(Array.isArray(data.recommendedDocs) ? data.recommendedDocs : []);
+      setLastFolders(Array.isArray(data.foldersUsed) ? data.foldersUsed : []);
+
+      if (data.conversationId && data.conversationId !== conversationId) {
+        setConversationId(data.conversationId);
+      }
+
+      await loadConversations(userId);
+    } catch (e: any) {
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: `Network error: ${e?.message || String(e)}` },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }
 
-  const data = await readJsonSafely<ChatResponse>(res);
-
-  // ❌ HTTP-level failure
-  if (!res.ok) {
-    const msg = (data?.error ?? `HTTP ${res.status}`).toString();
-    setMessages((m) => [
-      ...m,
-      {
-        role: "assistant",
-        content: `I hit an error.\n\n${msg}`,
-      },
-    ]);
-    return;
-  }
-
-  // ❌ Missing or invalid payload
-  if (!data || typeof data.answer !== "string" || !data.answer.trim()) {
-    const msg =
-      typeof data?.error === "string"
-        ? data.error
-        : "Empty or invalid response from server.";
-
-    setMessages((m) => [
-      ...m,
-      {
-        role: "assistant",
-        content: `I hit an error.\n\n${msg}`,
-      },
-    ]);
-    return;
-  }
-
-  // ✅ Success path (answer is guaranteed string)
-  const answerText = data.answer.trim();
-
-  setMessages((m) => [
-    ...m,
-    { role: "assistant", content: answerText },
-  ]);
-
-  setLastDocs(Array.isArray(data.recommendedDocs) ? data.recommendedDocs : []);
-  setLastFolders(Array.isArray(data.foldersUsed) ? data.foldersUsed : []);
-
-  if (data.conversationId && data.conversationId !== conversationId) {
-    setConversationId(data.conversationId);
-  }
-
-  if (userId) {
-    await loadConversations(userId);
-  }
-} catch (e: any) {
-  setMessages((m) => [
-    ...m,
-    {
-      role: "assistant",
-      content: `Network error: ${e?.message || String(e)}`,
-    },
-  ]);
-} finally {
-  setLoading(false);
-}
-
-
-  const hasDocs = lastDocs && lastDocs.length > 0;
+  const hasDocs = lastDocs.length > 0;
 
   const roleLabel =
     role === "anchor_rep"
@@ -418,8 +390,6 @@ export default function ChatPage() {
       : role === "admin"
       ? "Admin"
       : "no role";
-
-  const inputDisabled = profileLoading || historyLoading;
 
   return (
     <main className="min-h-screen anchor-app-bg text-white">
@@ -446,12 +416,8 @@ export default function ChatPage() {
             </button>
 
             <div className="leading-tight">
-              <div className="text-sm font-semibold tracking-wide">
-                Anchor Sales Co-Pilot
-              </div>
-              <div className="text-[12px] text-white/60">
-                Docs • Specs • Install • Downloads
-              </div>
+              <div className="text-sm font-semibold tracking-wide">Anchor Sales Co-Pilot</div>
+              <div className="text-[12px] text-white/60">Docs • Specs • Install • Downloads</div>
             </div>
           </div>
 
@@ -482,7 +448,7 @@ export default function ChatPage() {
 
       {/* Body */}
       <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 px-4 py-4 md:grid-cols-[280px_1fr_320px]">
-        {/* ✅ Sidebar (desktop uses ChatSidebar; mobile uses your existing panel pattern) */}
+        {/* Desktop sidebar */}
         <div className="hidden md:block">
           <ChatSidebar
             conversations={conversations.map((c) => ({
@@ -497,7 +463,7 @@ export default function ChatPage() {
           />
         </div>
 
-        {/* Mobile sidebar (simple) */}
+        {/* Mobile sidebar */}
         {sidebarOpen && (
           <aside className="md:hidden rounded-xl border border-white/10 bg-white/5 backdrop-blur shadow-[0_0_0_1px_rgba(255,255,255,0.06)]">
             <div className="border-b border-white/10 px-4 py-3 flex items-center justify-between">
@@ -596,9 +562,7 @@ export default function ChatPage() {
               <div className="flex w-full gap-2">
                 <input
                   className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-3 text-sm outline-none placeholder:text-white/40 focus:border-emerald-300/30 disabled:opacity-60"
-                  placeholder={
-                    inputDisabled ? "Loading your chat…" : 'Try: "U3400 PVC sales sheet"'
-                  }
+                  placeholder={inputDisabled ? "Loading your chat…" : 'Try: "U3400 PVC sales sheet"'}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   disabled={inputDisabled}
@@ -692,4 +656,4 @@ export default function ChatPage() {
       </div>
     </main>
   );
-}}
+}
