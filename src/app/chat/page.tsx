@@ -1,9 +1,11 @@
+// src/app/chat/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 import ChatSidebar from "@/app/components/ChatSidebar";
+import SourcesFeedback from "../components/chat/SourcesFeedback";
 
 type UserType = "internal" | "external";
 
@@ -14,11 +16,21 @@ type RecommendedDoc = {
   url: string | null;
 };
 
+type SourceUsed = {
+  chunkId: string;
+  documentId: string;
+  title: string | null;
+  similarity: number;
+  content: string;
+};
+
 type ChatResponse = {
   conversationId?: string;
+  sessionId?: string; // ✅ learning continuity
   answer?: string;
   foldersUsed?: string[];
   recommendedDocs?: RecommendedDoc[];
+  sourcesUsed?: SourceUsed[]; // ✅ sources for feedback UI
   error?: string;
 };
 
@@ -70,6 +82,7 @@ function titleOrNew(title?: string | null) {
   return t.length ? t : "New chat";
 }
 
+/** ✅ prevents "Unexpected end of JSON input" */
 async function readJsonSafely<T = any>(res: Response): Promise<T | null> {
   const text = await res.text();
   if (!text) return null;
@@ -84,30 +97,57 @@ export default function ChatPage() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
 
+  // profile-driven access
   const [role, setRole] = useState<ProfileRow["role"] | null>(null);
   const [userType, setUserType] = useState<UserType>("external");
   const [profileLoading, setProfileLoading] = useState(true);
 
+  // auth + legacy conversation id
   const [userId, setUserId] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
+  // ✅ learning continuity (new session id)
+  const [sessionId, setSessionId] = useState<string | null>(null);
+
+  // sidebar list
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [convoLoading, setConvoLoading] = useState(true);
 
+  // UI
   const [historyLoading, setHistoryLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // chat
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([DEFAULT_GREETING]);
   const [loading, setLoading] = useState(false);
+
+  // right panel
   const [lastDocs, setLastDocs] = useState<RecommendedDoc[]>([]);
   const [lastFolders, setLastFolders] = useState<string[]>([]);
+
+  // ✅ sources panel under assistant response
+  const [lastSources, setLastSources] = useState<SourceUsed[]>([]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading, historyLoading]);
+
+  const lastUserMessage = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") return messages[i].content;
+    }
+    return null;
+  }, [messages]);
+
+  const lastAssistantMessage = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") return messages[i].content;
+    }
+    return null;
+  }, [messages]);
 
   const loadConversationMessages = useCallback(
     async (uid: string, cid: string) => {
@@ -128,6 +168,9 @@ export default function ChatPage() {
         } else {
           setMessages([DEFAULT_GREETING]);
         }
+
+        // sources are per-response; clear when switching history
+        setLastSources([]);
       } finally {
         setHistoryLoading(false);
       }
@@ -183,8 +226,13 @@ export default function ChatPage() {
       }
 
       setConversationId(cid);
+
+      // reset per-conversation UI
       setLastDocs([]);
       setLastFolders([]);
+      setLastSources([]);
+      setSessionId(null);
+
       setInput("");
       setSidebarOpen(false);
 
@@ -217,58 +265,60 @@ export default function ChatPage() {
   );
 
   const deleteConversation = useCallback(
-  async (cid: string) => {
-    if (!userId) return;
+    async (cid: string) => {
+      if (!userId) return;
 
-    const ok = window.confirm("Delete this chat? You can’t undo this.");
-    if (!ok) return;
+      const ok = window.confirm("Delete this chat? You can’t undo this.");
+      if (!ok) return;
 
-    const now = new Date().toISOString();
+      const now = new Date().toISOString();
 
-    const { error } = await supabase
-      .from("conversations")
-      .update({ deleted_at: now, updated_at: now })
-      .eq("id", cid)
-      .eq("user_id", userId);
+      const { error } = await supabase
+        .from("conversations")
+        .update({ deleted_at: now, updated_at: now })
+        .eq("id", cid)
+        .eq("user_id", userId);
 
-    if (error) {
-      console.error("CONVERSATION_DELETE_ERROR:", error);
-      return;
-    }
-
-    const list = await loadConversations(userId);
-
-    if (cid === conversationId) {
-      const nextId = list?.[0]?.id ?? null;
-
-      if (nextId) {
-        setConversationId(nextId);
-        setLastDocs([]);
-        setLastFolders([]);
-        setInput("");
-        await loadConversationMessages(userId, nextId);
-      } else {
-        const created = await createConversation(userId);
-        const newId = created?.id ?? null;
-        setConversationId(newId);
-        setMessages([DEFAULT_GREETING]);
-        setLastDocs([]);
-        setLastFolders([]);
-        setInput("");
-        await loadConversations(userId);
+      if (error) {
+        console.error("CONVERSATION_DELETE_ERROR:", error);
+        return;
       }
-    }
-  },
-  [
-    userId,
-    supabase,
-    loadConversations,
-    conversationId,
-    loadConversationMessages,
-    createConversation,
-  ]
-);
 
+      const list = await loadConversations(userId);
+
+      if (cid === conversationId) {
+        const nextId = list?.[0]?.id ?? null;
+
+        // reset UI
+        setLastDocs([]);
+        setLastFolders([]);
+        setLastSources([]);
+        setSessionId(null);
+        setInput("");
+
+        if (nextId) {
+          setConversationId(nextId);
+          await loadConversationMessages(userId, nextId);
+        } else {
+          const created = await createConversation(userId);
+          const newId = created?.id ?? null;
+          setConversationId(newId);
+          setMessages([DEFAULT_GREETING]);
+          await loadConversations(userId);
+        }
+      }
+    },
+    [
+      userId,
+      supabase,
+      loadConversations,
+      conversationId,
+      loadConversationMessages,
+      createConversation,
+    ]
+  );
+
+  // boot
   useEffect(() => {
     let alive = true;
 
@@ -287,6 +337,7 @@ export default function ChatPage() {
 
         setUserId(user.id);
 
+        // profile
         let { data: profile, error: profileErr } = await supabase
           .from("profiles")
           .select("role,user_type,email")
@@ -305,13 +356,7 @@ export default function ChatPage() {
           const { data: created, error: upsertErr } = await supabase
             .from("profiles")
             .upsert(
-              {
-                id: user.id,
-                email,
-                user_type,
-                role: roleToSet,
-                updated_at: new Date().toISOString(),
-              },
+              { id: user.id, email, user_type, role: roleToSet, updated_at: new Date().toISOString() },
               { onConflict: "id" }
             )
             .select("role,user_type,email")
@@ -326,6 +371,7 @@ export default function ChatPage() {
         setRole(profile?.role ?? null);
         setUserType((profile?.user_type as UserType) ?? "external");
 
+        // conversations
         const list = await loadConversations(user.id);
         if (!alive) return;
 
@@ -363,9 +409,12 @@ export default function ChatPage() {
   async function newChat() {
     if (!userId) return;
 
+    // reset UI
     setMessages([DEFAULT_GREETING]);
     setLastDocs([]);
     setLastFolders([]);
+    setLastSources([]);
+    setSessionId(null);
     setInput("");
 
     const created = await createConversation(userId);
@@ -399,12 +448,18 @@ export default function ChatPage() {
     setMessages((m) => [...m, { role: "user", content: text }]);
     setInput("");
     setLoading(true);
+    setLastSources([]); // clear stale sources for prior answer
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, userType, conversationId }),
+        body: JSON.stringify({
+          message: text,
+          userType,
+          conversationId,
+          sessionId, // ✅ pass learning session
+        }),
       });
 
       if (res.status === 401) {
@@ -428,11 +483,14 @@ export default function ChatPage() {
         return;
       }
 
+      if (data.sessionId) setSessionId(data.sessionId);
+
       const answerText = data.answer.trim();
       setMessages((m) => [...m, { role: "assistant", content: answerText }]);
 
       setLastDocs(Array.isArray(data.recommendedDocs) ? data.recommendedDocs : []);
       setLastFolders(Array.isArray(data.foldersUsed) ? data.foldersUsed : []);
+      setLastSources(Array.isArray(data.sourcesUsed) ? data.sourcesUsed : []);
 
       // auto-title: first real user message sets the title if it's still "New chat"
       const current = conversations.find((c) => c.id === conversationId);
@@ -470,6 +528,7 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-screen anchor-app-bg text-white">
+      {/* Top bar */}
       <header className="sticky top-0 z-30 anchor-topbar">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
@@ -522,24 +581,26 @@ export default function ChatPage() {
         </div>
       </header>
 
+      {/* Body */}
       <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 px-4 py-4 md:grid-cols-[280px_1fr_320px]">
+        {/* Desktop sidebar */}
         <div className="hidden md:block">
           <ChatSidebar
-  conversations={conversations.map((c) => ({
-    id: c.id,
-    title: c.title,
-    updated_at: c.updated_at || c.created_at || null,
-  }))}
-  activeId={conversationId}
-  loading={convoLoading}
-  onNewChat={newChat}
-  onSelect={switchConversation}
-  onRename={renameConversation}
-  onDelete={deleteConversation}
-/>
-
+            conversations={conversations.map((c) => ({
+              id: c.id,
+              title: c.title,
+              updated_at: c.updated_at || c.created_at || null,
+            }))}
+            activeId={conversationId}
+            loading={convoLoading}
+            onNewChat={newChat}
+            onSelect={switchConversation}
+            onRename={renameConversation}
+            onDelete={deleteConversation}
+          />
         </div>
 
+        {/* Mobile sidebar */}
         {sidebarOpen && (
           <aside className="md:hidden rounded-xl border border-white/10 bg-white/5 backdrop-blur shadow-[0_0_0_1px_rgba(255,255,255,0.06)]">
             <div className="border-b border-white/10 px-4 py-3 flex items-center justify-between">
@@ -552,6 +613,7 @@ export default function ChatPage() {
                 Close
               </button>
             </div>
+
             <div className="p-2">
               {conversations.map((c) => {
                 const active = c.id === conversationId;
@@ -579,7 +641,6 @@ export default function ChatPage() {
             </div>
           </aside>
         )}
-      
 
         {/* Chat */}
         <section className="rounded-xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur">
@@ -604,6 +665,21 @@ export default function ChatPage() {
                   {m.content}
                 </div>
               ))}
+
+              {/* ✅ Sources + Feedback (attached to the latest assistant response) */}
+              {lastAssistantMessage && (
+  <div className="max-w-[92%]">
+    <SourcesFeedback
+      sources={lastSources}              // may be []
+      sessionId={sessionId}
+      conversationId={conversationId}
+      userMessage={lastUserMessage}
+      assistantMessage={lastAssistantMessage}
+    />
+  </div>
+)}
+
+
 
               {(historyLoading || loading) && (
                 <div className="max-w-[92%] rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white/80">
@@ -673,7 +749,7 @@ export default function ChatPage() {
           </div>
         </section>
 
-        {/* Docs Panel */}
+        {/* Docs panel */}
         <aside className="rounded-xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur">
           <div className="border-b border-white/10 px-4 py-3">
             <div className="text-sm font-semibold">Recommended documents</div>
@@ -733,5 +809,4 @@ export default function ChatPage() {
       </div>
     </main>
   );
-
 }
