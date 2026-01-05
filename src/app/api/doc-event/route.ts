@@ -9,7 +9,9 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   try {
     // 1) Read user session (requires cookies from the browser)
-    const supabase = supabaseRoute();
+    const base = NextResponse.next();
+const supabase = supabaseRoute(req, base);
+
     const { data: auth, error: authErr } = await supabase.auth.getUser();
 
 console.log("doc-event authErr:", authErr);
