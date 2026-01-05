@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { embedText } from "@/lib/learning/embeddings";
 
 type Supa = any;
@@ -31,4 +32,24 @@ export async function retrieveKnowledge(
   }
 
   return (data || []) as RetrievedChunk[];
+=======
+import { embed } from "@/lib/knowledge/embeddings";
+
+export async function retrieveKnowledge(
+  supabase: any,
+  query: string,
+  opts?: { matchCount?: number; category?: string | null; productTags?: string[] | null }
+) {
+  const queryEmbedding = await embed(query);
+
+  const { data, error } = await supabase.rpc("match_knowledge_chunks", {
+    query_embedding: queryEmbedding,
+    match_count: opts?.matchCount ?? 8,
+    filter_category: opts?.category ?? null,
+    filter_product_tags: opts?.productTags ?? null,
+  });
+
+  if (error) throw error;
+  return (data || []) as { id: string; document_id: string; content: string; similarity: number }[];
+>>>>>>> 7500f79 (Monday changes)
 }
