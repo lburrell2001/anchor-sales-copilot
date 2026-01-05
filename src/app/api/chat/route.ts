@@ -172,18 +172,28 @@ async function persistMessage(
   userId: string,
   conversationId: string,
   role: "user" | "assistant",
-  content: string
+  content: string,
+  meta?: any
 ) {
   try {
     if (!supabase || !userId || !conversationId) return;
+
     const text = (content || "").toString();
-    if (role === "assistant" && !text.trim()) return;
+    const safeMeta = meta && typeof meta === "object" ? meta : {};
+
+    // ✅ Only skip assistant if BOTH content is empty AND there is no useful meta
+    if (role === "assistant" && !text.trim()) {
+      const hasDocs = Array.isArray(safeMeta?.recommendedDocs) && safeMeta.recommendedDocs.length > 0;
+      const hasFolders = Array.isArray(safeMeta?.foldersUsed) && safeMeta.foldersUsed.length > 0;
+      if (!hasDocs && !hasFolders) return;
+    }
 
     await supabase.from("messages").insert({
       user_id: userId,
       conversation_id: conversationId,
       role,
       content: text,
+      meta: safeMeta, // ✅ store docs/folders here for rehydration
     });
   } catch {
     // swallow — chat must still work
@@ -198,7 +208,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({} as any));
     const mode = String(body?.mode || "").trim(); // "" | "docs"
-    const isDocsMode = mode === "docs"; // ✅ NEW
+    const isDocsMode = mode === "docs";
 
     const incomingMessages = Array.isArray(body?.messages)
       ? (body.messages as Array<{ role: string; content: string }>)
@@ -224,7 +234,7 @@ export async function POST(req: Request) {
     }
 
     /* ---------------------------------------------
-       1) Always try doc search first (unchanged)
+       1) Always try doc search first
        --------------------------------------------- */
 
     const snowMode = isSnowRetentionIntent(userText);
@@ -238,13 +248,9 @@ export async function POST(req: Request) {
     const snowFencePromise = snowMode ? fetchDocsFromDocsRoute(req, "snow fence", 12, 0) : Promise.resolve([]);
     const twoPipePromise = snowMode ? fetchDocsFromDocsRoute(req, "2pipe", 12, 0) : Promise.resolve([]);
 
-    const elevatedStacksPromise = stackMode
-      ? fetchDocsFromDocsRoute(req, "elevated stacks", 12, 0)
-      : Promise.resolve([]);
+    const elevatedStacksPromise = stackMode ? fetchDocsFromDocsRoute(req, "elevated stacks", 12, 0) : Promise.resolve([]);
 
-    const guyWireKitPromise = tieDownMode
-      ? fetchDocsFromDocsRoute(req, "guy wire kit", 12, 0)
-      : Promise.resolve([]);
+    const guyWireKitPromise = tieDownMode ? fetchDocsFromDocsRoute(req, "guy wire kit", 12, 0) : Promise.resolve([]);
 
     const [baseDocs, snowFenceDocs, twoPipeDocs, elevatedStacksDocs, guyWireKitDocs] = await Promise.all([
       baseDocsPromise,
@@ -260,7 +266,7 @@ export async function POST(req: Request) {
 
     const docs = mergeDocsUniqueByPath(baseDocs, snowFenceDocs, twoPipeDocs, elevatedStacksDocs, guyWireKitDocs);
 
-    // ✅ See Docs mode: docs-only, no OpenAI, no persistence
+    // ✅ See Docs mode: docs-only, no OpenAI, but DO persist assistant meta so UI can rehydrate later
     if (isDocsMode) {
       const out: ChatResponse = {
         conversationId: conversationId || body?.conversationId,
@@ -268,9 +274,19 @@ export async function POST(req: Request) {
         recommendedDocs: docs.length ? docs : [],
         foldersUsed,
       };
+
+      if (user && conversationId) {
+        await persistMessage(supabase, user.id, conversationId, "assistant", "", {
+          type: "docs_only",
+          recommendedDocs: docs,
+          foldersUsed,
+        });
+      }
+
       return NextResponse.json(out, { status: 200 });
     }
 
+    // ✅ Doc-request path: docs-only response, but persist meta so the "See docs" button rehydrates on reload
     if (docs.length > 0 && looksLikeDocRequest(userText)) {
       const out: ChatResponse = {
         conversationId: conversationId || body?.conversationId,
@@ -278,6 +294,15 @@ export async function POST(req: Request) {
         recommendedDocs: docs,
         foldersUsed,
       };
+
+      if (user && conversationId) {
+        await persistMessage(supabase, user.id, conversationId, "assistant", "", {
+          type: "docs_only",
+          recommendedDocs: docs,
+          foldersUsed,
+        });
+      }
+
       return NextResponse.json(out, { status: 200 });
     }
 
@@ -292,7 +317,7 @@ export async function POST(req: Request) {
     }
 
     /* ---------------------------------------------
-       2) Advisory / sales-copilot answer (unchanged)
+       2) Advisory / sales-copilot answer
        --------------------------------------------- */
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -338,9 +363,17 @@ export async function POST(req: Request) {
       answer = "I couldn’t generate a response right now (temporary AI error). Please try again in a moment.";
     }
 
-    // ✅ Persist assistant ONLY for real chat sends
-    if (!isDocsMode && user && conversationId) {
-      await persistMessage(supabase, user.id, conversationId, "assistant", answer);
+    // ✅ Persist assistant for advisory answers.
+    // If docs exist, store meta so history can rehydrate the "See docs" button on reload.
+    if (user && conversationId) {
+      await persistMessage(
+        supabase,
+        user.id,
+        conversationId,
+        "assistant",
+        answer,
+        docs.length ? { type: "assistant_with_docs", recommendedDocs: docs, foldersUsed } : {}
+      );
     }
 
     const out: ChatResponse = {

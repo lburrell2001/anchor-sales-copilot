@@ -35,7 +35,14 @@ type ChatResponse = {
   error?: string;
 };
 
-type Msg = { role: "user" | "assistant"; content: string };
+type MsgMeta = {
+  type?: "docs_only" | "assistant_with_docs";
+  recommendedDocs?: RecommendedDoc[];
+  foldersUsed?: string[];
+};
+
+type Msg = { role: "user" | "assistant"; content: string; meta?: MsgMeta | null };
+
 
 type ProfileRow = {
   role: "admin" | "anchor_rep" | "external_rep";
@@ -55,6 +62,7 @@ type MessageRow = {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  meta?: MsgMeta | null;
 };
 
 const QUICK_PICKS: string[] = [
@@ -242,7 +250,7 @@ export default function ChatPage() {
       try {
         const { data: rows, error: msgErr } = await supabase
           .from("messages")
-          .select("role,content,created_at")
+          .select("role,content,meta,created_at")
           .eq("conversation_id", cid)
           .eq("user_id", uid)
           .order("created_at", { ascending: true })
@@ -251,19 +259,71 @@ export default function ChatPage() {
         if (msgErr) console.error("MESSAGES_LOAD_ERROR:", msgErr);
 
         if (rows && rows.length > 0) {
-          setMessages(rows.map((r: MessageRow) => ({ role: r.role, content: r.content })));
-        } else {
-          setMessages([DEFAULT_GREETING]);
-        }
+  // Build display messages (skip empty assistant bubbles),
+  // but keep docs meta by attaching it to the previous user message.
+  const display: Array<{ role: "user" | "assistant"; content: string; meta?: any }> = [];
+  const nextDocsReady: Record<number, boolean> = {};
+
+  let lastUserDisplayIndex: number | null = null;
+
+  for (const r of rows as any[]) {
+    const role = r.role as "user" | "assistant";
+    const content = (r.content ?? "").toString();
+    const meta = r.meta ?? null;
+
+    // ✅ If this is a docs-only assistant row (empty content), don't render it
+    // but attach its meta to the previous user message.
+    if (role === "assistant" && !content.trim()) {
+      const docs = meta?.recommendedDocs;
+      const folders = meta?.foldersUsed;
+
+      if (
+        lastUserDisplayIndex !== null &&
+        (Array.isArray(docs) && docs.length > 0)
+      ) {
+        // attach docs meta to the last user bubble
+        display[lastUserDisplayIndex].meta = { ...(display[lastUserDisplayIndex].meta || {}), ...meta };
+
+        // mark that user bubble as having docs
+        nextDocsReady[lastUserDisplayIndex] = true;
+
+        // also restore right panel to last seen docs
+        setLastDocs(docs);
+        setLastFolders(Array.isArray(folders) ? folders : []);
+      }
+
+      continue; // skip rendering this blank assistant bubble
+    }
+
+    // Normal message bubble
+    const idx = display.length;
+    display.push({ role, content, meta });
+
+    if (role === "user") lastUserDisplayIndex = idx;
+
+    // If an assistant answer has docs meta, mark the previous user bubble
+    if (role === "assistant") {
+      const docs = meta?.recommendedDocs;
+      if (lastUserDisplayIndex !== null && Array.isArray(docs) && docs.length > 0) {
+        nextDocsReady[lastUserDisplayIndex] = true;
+      }
+    }
+  }
+
+  setMessages(display as any);
+  setDocsReadyFor(nextDocsReady);
+} else {
+  setMessages([DEFAULT_GREETING] as any);
+  setDocsReadyFor({});
+}
+
+
 
         // clear per-response panels when switching history
         setLastSources([]);
         setLastDocs([]);
         setLastFolders([]);
         setShowFeedback(false);
-
-        // ✅ reset "See docs" state for this view
-        setDocsReadyFor({});
 
         // reset docs paging
         setDocsPage(0);
