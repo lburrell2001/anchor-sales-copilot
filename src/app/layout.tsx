@@ -1,45 +1,12 @@
 // src/app/layout.tsx
 import "./globals.css";
-import type { Metadata, Viewport } from "next";
 
-export const metadata: Metadata = {
+export const metadata = {
   title: {
     default: "Anchor Sales Co-Pilot",
     template: "%s • Anchor Sales Co-Pilot",
   },
   description: "Docs • Specs • Install • Downloads",
-
-  // ✅ App Router manifest route from src/app/manifest.ts
-  manifest: "/manifest.webmanifest",
-
-  // ✅ Proper PWA + iOS metadata
-  applicationName: "Anchor Sales Co-Pilot",
-  appleWebApp: {
-    capable: true,
-    title: "Anchor Co-Pilot",
-    statusBarStyle: "black-translucent",
-  },
-
-  // ✅ These paths match your /public files (no /icons folder)
-  icons: {
-    icon: [
-      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
-      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
-    ],
-    apple: [
-      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
-    ],
-    shortcut: ["/favicon.ico"],
-  },
-
- 
-};
-
-export const viewport: Viewport = {
-  themeColor: "#047835",
-  width: "device-width",
-  initialScale: 1,
-  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -49,6 +16,28 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        {/* === PWA MANIFEST (required for Chrome / Android detection) === */}
+        <link rel="manifest" href="/manifest.webmanifest" />
+
+        {/* === Theme + mobile behavior === */}
+        <meta name="theme-color" content="#047835" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Anchor Co-Pilot" />
+
+        {/* === Icons === */}
+        <link rel="icon" href="/favicon.ico" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+        {/* === Viewport (safe for PWA + iOS) === */}
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+      </head>
+
       <body>{children}</body>
     </html>
   );
