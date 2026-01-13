@@ -96,9 +96,7 @@ export default function DashboardPage() {
                 <span className="transition group-hover:translate-x-1 inline-block">→</span>
               </div>
 
-              <div className="h-10 w-10 rounded-2xl bg-[#9CE2BB] ring-1 ring-black/10 flex items-center justify-center">
-                <span className="text-[#11500F] font-black">C</span>
-              </div>
+              
             </div>
           </Link>
 
@@ -126,9 +124,7 @@ export default function DashboardPage() {
                 <span className="transition group-hover:translate-x-1 inline-block">→</span>
               </div>
 
-              <div className="h-10 w-10 rounded-2xl bg-black/5 ring-1 ring-black/10 flex items-center justify-center">
-                <span className="text-black/70 font-black">A</span>
-              </div>
+              
             </div>
           </Link>
         </div>
