@@ -6,28 +6,47 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: Request) {
+function safeJsonParse(input: string) {
   try {
-    // 1) Read user session (requires cookies from the browser)
-    const base = NextResponse.next();
-const supabase = supabaseRoute(req, base);
+    return JSON.parse(input);
+  } catch {
+    return null;
+  }
+}
+
+export async function POST(req: Request) {
+  // ✅ Create a real response object for Supabase cookie refresh handling
+  const res = NextResponse.json({ ok: true });
+
+  try {
+    // 1) Read user session (cookies come from the browser)
+    const supabase = supabaseRoute(req, res);
 
     const { data: auth, error: authErr } = await supabase.auth.getUser();
+    const user = auth?.user;
 
-console.log("doc-event authErr:", authErr);
-console.log("doc-event user:", auth?.user?.id);
+    if (authErr) {
+      return NextResponse.json(
+        { error: authErr.message || "Auth error" },
+        { status: 401 }
+      );
+    }
 
-const user = auth?.user;
-if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
+    // 2) Parse payload (sendBeacon may come as text/plain)
+    const raw = await req.text().catch(() => "");
+    const body = safeJsonParse(raw) ?? {};
 
-    // 2) Parse payload
-    const body = await req.json().catch(() => ({}));
     const conversationId = String(body?.conversationId || "").trim() || null;
     const doc = body?.doc || {};
 
     const doc_path = String(doc?.path || "").trim();
-    if (!doc_path) return NextResponse.json({ error: "Missing doc.path" }, { status: 400 });
+    if (!doc_path) {
+      return NextResponse.json({ error: "Missing doc.path" }, { status: 400 });
+    }
 
     const payload = {
       user_id: user.id,
@@ -36,16 +55,23 @@ if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       doc_title: String(doc?.title || "").trim() || null,
       doc_type: String(doc?.doc_type || "").trim() || null,
       doc_url: String(doc?.url || "").trim() || null,
-      // let DB default handle created_at if you have it
+      // If your DB already defaults created_at, you can remove this:
       created_at: new Date().toISOString(),
     };
 
     // 3) Insert with service role (bypasses RLS)
     const { error: insertErr } = await supabaseAdmin.from("doc_events").insert(payload);
-    if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
 
-    return NextResponse.json({ ok: true }, { status: 200 });
+    if (insertErr) {
+      return NextResponse.json({ error: insertErr.message }, { status: 500 });
+    }
+
+    // ✅ Return the response object we created (so any auth cookie refresh can be applied)
+    return res;
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message || String(e) },
+      { status: 500 }
+    );
   }
 }

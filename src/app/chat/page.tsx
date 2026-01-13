@@ -194,6 +194,22 @@ export default function ChatPage() {
     return true;
   }, [isDefaultGreeting, lastAssistantMessage]);
 
+  async function openDoc(path: string) {
+  const res = await fetch(`/api/doc-open?path=${encodeURIComponent(path)}`, {
+    method: "GET",
+    cache: "no-store",
+  });
+
+  if (res.status === 401) {
+    router.replace("/");
+    router.refresh();
+    return;
+  }
+
+  const data = await readJsonSafely<{ url?: string }>(res);
+  if (res.ok && data?.url) window.open(data.url, "_blank", "noopener,noreferrer");
+}
+
   // ✅ Docs-only pull for a specific user message index
   async function seeDocsFor(idx: number, text: string) {
     if (!text) return;

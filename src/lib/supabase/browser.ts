@@ -1,8 +1,23 @@
-import { createBrowserClient } from "@supabase/ssr";
+// src/lib/supabase/browser.ts
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
+let client: SupabaseClient | null = null;
 
 export function supabaseBrowser() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  if (client) return client;
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+  client = createClient(url, anon, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storageKey: "anchor-sales-copilot-auth",
+      storage: typeof window !== "undefined" ? window.localStorage : undefined,
+    },
+  });
+
+  return client;
 }
