@@ -5,7 +5,7 @@
 ========================= */
 :root {
   /* Core */
-  --bg: #06080b;
+  --bg: #047835;
   --panel: rgba(255, 255, 255, 0.06);
   --panel-2: rgba(0, 0, 0, 0.35);
   --border: rgba(255, 255, 255, 0.10);
@@ -29,15 +29,27 @@
   --ring: 0 0 0 1px rgba(255,255,255,0.06);
 }
 
+/* Full-bleed, iOS-safe */
 html,
 body {
+  width: 100%;
   height: 100%;
-  background: var(--bg);
+  margin: 0;
+  padding: 0;
+
+  /* Avoid iOS rubber-band white gutters */
+  background: linear-gradient(to right, #11500F 0%, #047835 45%, #047835 100%);
 }
 
+/* IMPORTANT:
+   Don't pad the entire body with safe-area — it shrinks the app.
+   Let individual headers handle safe-area instead. */
 body {
+  min-height: 100svh; /* stable viewport on iOS */
+  min-height: 100dvh; /* modern browsers */
   color: var(--text);
   font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
 }
 
 /* remove iOS tap flash */
@@ -48,19 +60,19 @@ body {
 /* =========================
    AnchorP UI Building Blocks
 ========================= */
+
+/* Use the same side-to-side gradient everywhere (matches header) */
 .anchor-app-bg {
-  background:
-    radial-gradient(1200px 600px at 20% -10%, rgba(34, 197, 94, 0.18), transparent 55%),
-    radial-gradient(900px 500px at 90% 0%, rgba(52, 211, 153, 0.14), transparent 55%),
-    linear-gradient(to bottom, #050607, #06080b 55%, #040404);
+  background: linear-gradient(to right, #11500F 0%, #047835 45%, #047835 100%);
 }
 
+/* If you want the topbar green, make it solid green */
 .anchor-topbar {
-  background: rgba(0,0,0,0.40);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border);
+  background: #047835;
+  border-bottom: 1px solid rgba(0,0,0,0.10);
 }
 
+/* Cards / panels */
 .anchor-card {
   border: 1px solid var(--border);
   background: var(--panel);

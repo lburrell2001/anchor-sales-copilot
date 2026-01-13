@@ -806,9 +806,10 @@ function returnToDesktop() {
   const GREEN = "text-[#047835]";
 
   return (
-    <main className="h-[100svh] bg-[#F6F7F8] text-black flex flex-col overflow-hidden">
+    <main className="min-h-[100svh] bg-[#F6F7F8] text-black flex flex-col">
       {/* Top bar */}
-      <header className="sticky top-0 z-30 shrink-0 border-b border-black/10 bg-gradient-to-r from-[#11500F] via-[#047835] to-[#047835]">
+      <header className="sticky top-0 z-30 bg-[#047835] pt-[env(safe-area-inset-top)]">
+
   <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
     {/* Left: brand + menu */}
     <div className="flex min-w-0 items-center gap-3">
@@ -885,9 +886,11 @@ function returnToDesktop() {
 
 
       {/* Body */}
-      <div className="flex-1 min-h-0">
-        <div className="mx-auto h-full max-w-6xl px-4 py-4">
-          <div className="grid h-full grid-cols-1 gap-4 md:grid-cols-[280px_1fr_320px]">
+      {/* Body */}
+<div className="flex-1">
+  <div className="mx-auto max-w-6xl px-4 py-4">
+    <div className="flex flex-col gap-4 md:grid md:h-[calc(100svh-64px)] md:grid-cols-[280px_1fr_320px]">
+
             {/* Desktop sidebar */}
             <aside className={`hidden md:flex ${PANEL} flex-col min-h-0`}>
               <div className={`${PANEL_BODY} ${SOFT_SCROLL} bg-transparent`}>
@@ -955,7 +958,16 @@ function returnToDesktop() {
             )}
 
             {/* Chat panel */}
-            <section className={`${PANEL} flex flex-col h-full min-h-0`}>
+            <section
+  className={[
+    PANEL,
+    "flex flex-col",
+    "h-[calc(100svh-64px)] md:h-full", // header height
+    "min-h-0",
+    "shrink-0",
+  ].join(" ")}
+>
+
               <div className={PANEL_HEADER}>
                 <div className={`text-xs ${MUTED}`}>
                   Ask like: “U2400 EPDM install manual + data sheet” or “HVAC solution docs”
@@ -1120,13 +1132,14 @@ function returnToDesktop() {
 
             {/* Docs panel */}
             <aside
-              className={[
-                PANEL,
-                "flex flex-col h-full min-h-0",
-                hasDocs ? "block" : "hidden",
-                "md:flex md:block",
-              ].join(" ")}
-            >
+  className={[
+    PANEL,
+    "flex flex-col h-auto md:h-full md:min-h-0",
+    hasDocs ? "block" : "hidden",
+    "md:flex md:block",
+  ].join(" ")}
+>
+
               <div className={PANEL_HEADER}>
                 <div className="text-sm font-semibold">Recommended documents</div>
                 <div className={`mt-1 text-[12px] ${MUTED}`}>Tap to download/share</div>

@@ -7,7 +7,7 @@ export default function AssetsPage() {
   return (
     <main className="min-h-dvh bg-[#F6F7F8] text-black">
       {/* Top bar */}
-      <header className="sticky top-0 z-30 border-b border-black/10 bg-gradient-to-r from-[#11500F] via-[#047835] to-[#047835]">
+      <header className="sticky top-0 z-30 bg-[#047835] pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-5 py-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="h-9 w-9 rounded-md bg-white/10 border border-white/20 flex items-center justify-center shrink-0">
