@@ -252,43 +252,46 @@ export default function DashboardPage() {
     <main className="min-h-[100svh] min-h-dvh bg-[#FFFFFF] text-[#000000]">
       {/* Sticky header */}
       <header className="sticky top-0 z-30 bg-[#047835] pt-[env(safe-area-inset-top)]">
-        <div className="mx-auto max-w-6xl px-5 py-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/15 flex items-center justify-center">
-                <img src="/anchorp.svg" alt="Anchor" className="h-10 w-auto" />
-              </div>
-
-              <div className="leading-tight">
-                <div className="text-sm font-semibold tracking-wide text-white">
-                  Anchor Sales Co-Pilot
-                </div>
-                <div className="text-[12px] text-white/80">Dashboard</div>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={signOut}
-              className="h-9 min-w-[96px] inline-flex items-center justify-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
-              title="Sign out"
-            >
-              Sign out
-            </button>
-          </div>
+  <div className="mx-auto max-w-6xl px-5 py-4">
+    <div className="flex items-center justify-between gap-3 min-w-0">
+      {/* Left lockup */}
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="h-11 w-11 rounded-xl bg-white/10 ring-1 ring-white/15 flex items-center justify-center shrink-0">
+          <img src="/anchorp.svg" alt="Anchor" className="h-10 w-auto" />
         </div>
 
-        {/* Hero text */}
-        <div className="mx-auto max-w-6xl px-5 pb-6">
-          <div className="mt-2 flex flex-col gap-2">
-            <h1 className="text-3xl font-semibold tracking-tight text-white">Welcome back</h1>
-            <p className="max-w-2xl text-sm text-white/80">
-              Jump into Copilot or manage product tackle boxes. Everything stays organized, modern,
-              and fast.
-            </p>
+        <div className="leading-tight min-w-0">
+          <div className="text-sm font-semibold tracking-wide text-white truncate">
+            Anchor Sales Co-Pilot
           </div>
+          <div className="text-[12px] text-white/80 truncate">Dashboard</div>
         </div>
-      </header>
+      </div>
+
+      {/* Button (truncate if needed) */}
+      <button
+        type="button"
+        onClick={signOut}
+        className="h-9 min-w-0 max-w-[110px] shrink inline-flex items-center justify-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition overflow-hidden whitespace-nowrap text-ellipsis"
+        title="Sign out"
+      >
+        Sign out
+      </button>
+    </div>
+  </div>
+
+  {/* Hero text */}
+  <div className="mx-auto max-w-6xl px-5 pb-6">
+    <div className="mt-2 flex flex-col gap-2">
+      <h1 className="text-3xl font-semibold tracking-tight text-white">Welcome back</h1>
+      <p className="max-w-2xl text-sm text-white/80">
+        Jump into Copilot or manage product tackle boxes. Everything stays organized, modern,
+        and fast.
+      </p>
+    </div>
+  </div>
+</header>
+
 
       {/* Body */}
       <div className="mx-auto max-w-6xl px-5 py-8 pb-[calc(2rem+env(safe-area-inset-bottom))]">
@@ -351,83 +354,118 @@ export default function DashboardPage() {
         </div>
 
         {/* Secondary section */}
-        <div className="mt-6 grid gap-5 md:grid-cols-[1fr_360px]">
-          {/* Left */}
-          <div className="rounded-3xl border border-black/10 bg-white p-5">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">Recent activity</div>
-            </div>
+<div className="mt-6 grid gap-5 md:grid-cols-[1fr_360px]">
+  {/* Left */}
+  <div className="rounded-3xl border border-black/10 bg-white p-5 min-w-0">
+    <div className="flex items-center justify-between min-w-0">
+      <div className="text-sm font-semibold">Recent activity</div>
+    </div>
 
-            <div className="mt-3 space-y-4">
-              {/* Recent chats */}
-              <div>
-                <div className="text-[11px] font-semibold text-black/70">Recent chats</div>
+    <div className="mt-3 space-y-4 min-w-0">
+      {/* Recent chats */}
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold text-black/70">Recent chats</div>
 
-                {loadingChats ? (
-                  <div className="mt-2 text-sm text-[#76777B]">Loading…</div>
-                ) : recentChats.length === 0 ? (
-                  <div className="mt-2 text-sm text-[#76777B]">No chats yet.</div>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {recentChats.slice(0, 3).map((c) => (
-                      <Link
-                        key={c.id}
-                        href={`/chat?cid=${encodeURIComponent(c.id)}`}
-                        className="block rounded-2xl border border-black/10 bg-white px-3 py-2 hover:bg-black/[0.03] transition"
-                        title="Open chat"
-                      >
-                        <div className="truncate text-[12px] font-semibold text-black/85">
-                          {titleOrNew(c.title)}
-                        </div>
-                        <div className="text-[11px] text-[#76777B]">
-                          {formatWhen(c.updated_at || c.created_at)}
-                        </div>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Recent docs opened */}
-              <div>
-                <div className="text-[11px] font-semibold text-black/70">Recent docs opened</div>
-
-                {loadingRecentDocs ? (
-                  <div className="mt-2 text-sm text-[#76777B]">Loading…</div>
-                ) : recentDocs.length === 0 ? (
-                  <div className="mt-2 text-sm text-[#76777B]">No docs opened yet.</div>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {recentDocs.slice(0, 5).map((r) => (
-                      <a
-                        key={`${r.doc_path}-${r.created_at}`}
-                        href={`/api/doc-open?path=${encodeURIComponent(r.doc_path)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block w-full rounded-2xl border border-black/10 bg-white px-3 py-2 hover:bg-black/[0.03] transition"
-                        title="Open document"
-                      >
-                        <div className="truncate text-[12px] font-semibold text-black/85">
-                          {r.doc_title || r.doc_path}
-                        </div>
-                        <div className="text-[11px] text-[#76777B] truncate">
-                          {(r.doc_type || "doc")} • {r.doc_path}
-                        </div>
-                      </a>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Placeholder */}
-              <div className="rounded-2xl border border-black/10 bg-[#F6F7F8] p-3">
-                <div className="text-[11px] font-semibold text-black/70">Assets viewed</div>
-                <div className="mt-1 text-sm text-[#76777B]">
-                  Coming next (once Asset Management events are wired).
+        {loadingChats ? (
+          <div className="mt-2 text-sm text-[#76777B]">Loading…</div>
+        ) : recentChats.length === 0 ? (
+          <div className="mt-2 text-sm text-[#76777B]">No chats yet.</div>
+        ) : (
+          <div className="mt-2 space-y-2 min-w-0">
+            {recentChats.slice(0, 3).map((c) => (
+              <Link
+                key={c.id}
+                href={`/chat?cid=${encodeURIComponent(c.id)}`}
+                className="block min-w-0 rounded-2xl border border-black/10 bg-white px-3 py-2 hover:bg-black/[0.03] transition"
+                title="Open chat"
+              >
+                <div className="min-w-0 truncate text-[12px] font-semibold text-black/85">
+                  {titleOrNew(c.title)}
                 </div>
-              </div>
-            </div>
+                <div className="min-w-0 text-[11px] text-[#76777B] truncate">
+                  {formatWhen(c.updated_at || c.created_at)}
+                </div>
+              </Link>
+            ))}
           </div>
+        )}
+      </div>
+
+      {/* Recent docs opened */}
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold text-black/70">Recent docs opened</div>
+
+        {loadingRecentDocs ? (
+          <div className="mt-2 text-sm text-[#76777B]">Loading…</div>
+        ) : recentDocs.length === 0 ? (
+          <div className="mt-2 text-sm text-[#76777B]">No docs opened yet.</div>
+        ) : (
+          <div className="mt-2 space-y-2 min-w-0">
+            {recentDocs.slice(0, 5).map((r) => (
+              <a
+                key={`${r.doc_path}-${r.created_at}`}
+                href={`/api/doc-open?path=${encodeURIComponent(r.doc_path)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block w-full min-w-0 rounded-2xl border border-black/10 bg-white px-3 py-2 hover:bg-black/[0.03] transition"
+                title="Open document"
+              >
+                <div className="min-w-0 truncate text-[12px] font-semibold text-black/85">
+                  {r.doc_title || r.doc_path}
+                </div>
+                <div className="min-w-0 text-[11px] text-[#76777B] truncate">
+                  {(r.doc_type || "doc")} • {r.doc_path}
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+
+      
+    </div>
+  </div>
+
+  {/* Right */}
+  <div className="grid gap-5 self-start">
+    <div className="rounded-3xl border border-black/10 bg-white p-5">
+      <div className="text-sm font-semibold">Quick links</div>
+      <div className="mt-3 flex flex-col gap-2 text-sm">
+        <Link className="text-[#047835] hover:underline" href="/chat">
+          Go to Copilot
+        </Link>
+        <Link className="text-[#047835] hover:underline" href="/assets">
+          Open Asset Library
+        </Link>
+      </div>
+    </div>
+
+    <div className="rounded-3xl border border-black/10 bg-white p-5">
+      <div className="text-sm font-semibold">System status</div>
+
+      <div className="mt-2 flex items-center gap-2">
+        <span
+          className={[
+            "h-2.5 w-2.5 rounded-full",
+            status === "online"
+              ? "bg-[#047835]"
+              : status === "offline"
+              ? "bg-red-500"
+              : "bg-amber-400",
+          ].join(" ")}
+        />
+        <span className="text-sm text-[#76777B]">
+          {status === "checking" ? "Checking…" : status === "online" ? "Online" : "Offline"}
+        </span>
+      </div>
+
+      {statusWhen && (
+        <div className="mt-2 text-[11px] text-[#76777B]">Last checked: {statusWhen}</div>
+      )}
+    </div>
+  </div>
+
+
 
           {/* Right */}
           <div className="grid gap-5 self-start">
