@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase/browser";
+import { useRouter } from "next/navigation";
 
 type ProductRow = {
   id: string;
@@ -10,8 +11,10 @@ type ProductRow = {
   sku: string | null;
   series: string | null;
   section: string | null; // solution | anchor | internal_assets
+  internal_kind: "tacklebox" | "docs_list" | "contacts_list" | null;
   active: boolean;
 };
+
 
 type AssetRow = {
   id: string;
@@ -36,7 +39,13 @@ const TAB_DEFS: {
   categoryKeys: string[];
   visibility?: "public" | "internal";
 }[] = [
-  { key: "spec", label: "Spec Document", categoryKeys: ["spec_document"], visibility: "public" },
+  // ✅ include legacy spec keys for back-compat
+  {
+    key: "spec",
+    label: "Spec Document",
+    categoryKeys: ["spec_document", "spec", "specs", "spec_sheet"],
+    visibility: "public",
+  },
   { key: "data", label: "Data Sheet", categoryKeys: ["data_sheet", "product_data_sheet"], visibility: "public" },
   { key: "install", label: "Install Guide", categoryKeys: ["install_manual", "install_sheet"], visibility: "public" },
   { key: "sales", label: "Sales Sheet", categoryKeys: ["sales_sheet"], visibility: "public" },
@@ -58,8 +67,13 @@ function docOpenHref(path: string, download = true) {
   return `/api/doc-open?path=${encodeURIComponent(p)}${download ? "&download=1" : ""}`;
 }
 
-function cat(a: AssetRow) {
-  return String(a.category_key || "").toLowerCase().trim();
+// legacy/back-compat category normalization:
+// - prefer category_key, but fall back to type
+// - map common older spec variants to spec_document
+function canonicalCategory(a: AssetRow) {
+  const raw = String(a.category_key || a.type || "").toLowerCase().trim();
+  if (raw === "spec" || raw === "specs" || raw === "spec_sheet") return "spec_document";
+  return raw;
 }
 
 export default function ProductTackleBox({ productId }: { productId: string }) {
@@ -73,6 +87,7 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
 
   const [isInternalUser, setIsInternalUser] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const router = useRouter();
 
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({
@@ -85,74 +100,94 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
   const [formMsg, setFormMsg] = useState<string | null>(null);
 
   async function load() {
-  setLoading(true);
-  setError(null);
+    setLoading(true);
+    setError(null);
 
-  try {
-    const { data: auth } = await supabase.auth.getUser();
-    const user = auth.user;
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const user = auth.user;
 
-    // determine internal/admin from profiles.role
-    if (user) {
-      try {
-        const { data: prof } = await supabase
-          .from("profiles")
-          .select("id,role")
-          .eq("id", user.id)
-          .maybeSingle();
+      // determine internal/admin from profiles.role
+      if (user) {
+        try {
+          const { data: prof } = await supabase
+            .from("profiles")
+            .select("id,role")
+            .eq("id", user.id)
+            .maybeSingle();
 
-        const role = (prof as ProfileRow | null)?.role || "";
-        const internal = role === "admin" || role === "anchor_rep";
-        setIsInternalUser(internal);
-        setIsAdmin(role === "admin");
-      } catch {
+          const role = (prof as ProfileRow | null)?.role || "";
+          const internal = role === "admin" || role === "anchor_rep";
+          setIsInternalUser(internal);
+          setIsAdmin(role === "admin");
+        } catch {
+          setIsInternalUser(false);
+          setIsAdmin(false);
+        }
+      } else {
         setIsInternalUser(false);
         setIsAdmin(false);
       }
-    } else {
-      setIsInternalUser(false);
-      setIsAdmin(false);
-    }
 
-    // product
-    const { data: p, error: pErr } = await supabase
-      .from("products")
-      .select("id,name,sku,series,section,active")
-      .eq("id", productId)
-      .maybeSingle();
+      // product
+      const { data: p, error: pErr } = await supabase
+        .from("products")
+        .select("id,name,sku,series,section,internal_kind,active")
+        .eq("id", productId)
+        .maybeSingle();
 
-    if (pErr) {
-      setError(pErr.message);
-      setLoading(false);
-      return;
-    }
-    if (!p) {
-      setError("Product not found.");
-      setLoading(false);
-      return;
-    }
+      if (pErr) {
+        setError(pErr.message);
+        setLoading(false);
+        return;
+      }
+      if (!p) {
+        setError("Product not found.");
+        setLoading(false);
+        return;
+      }
+      if (p.section === "internal_assets") {
+  const kind = (p as ProductRow).internal_kind;
 
-    // product assets (no global spec injection)
-    const { data: a, error: aErr } = await supabase
-      .from("assets")
-      .select("id,product_id,title,type,category_key,path,visibility,created_at")
-      .eq("product_id", productId)
-      .order("created_at", { ascending: false });
-
-    if (aErr) {
-      setError(aErr.message);
-      setLoading(false);
-      return;
-    }
-
-    setProduct(p as ProductRow);
-    setAssets((a as AssetRow[]) ?? []);
-    setLoading(false);
-  } catch (e: any) {
-    setError(e?.message || "Failed to load tackle box.");
-    setLoading(false);
+  if (kind === "contacts_list") {
+    router.replace(`/internal-assets/contacts/${encodeURIComponent(p.id)}`);
+  } else {
+    router.replace(`/internal-assets/docs/${encodeURIComponent(p.id)}`);
   }
+
+  setLoading(false);
+  return;
 }
+
+      console.log("ProductTackleBox loaded product:", {
+  id: p.id,
+  name: p.name,
+  section: p.section,
+  internal_kind: (p as any).internal_kind,
+});
+
+
+      // product assets (no global spec injection)
+      const { data: a, error: aErr } = await supabase
+        .from("assets")
+        .select("id,product_id,title,type,category_key,path,visibility,created_at")
+        .eq("product_id", productId)
+        .order("created_at", { ascending: false });
+
+      if (aErr) {
+        setError(aErr.message);
+        setLoading(false);
+        return;
+      }
+
+      setProduct(p as ProductRow);
+      setAssets((a as AssetRow[]) ?? []);
+      setLoading(false);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load tackle box.");
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
     load();
@@ -176,7 +211,7 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
 
   const filtered = useMemo(() => {
     const allowed = new Set(tab.categoryKeys.map((k) => String(k || "").toLowerCase().trim()));
-    return assets.filter((x) => allowed.has(cat(x)));
+    return assets.filter((x) => allowed.has(canonicalCategory(x)));
   }, [assets, tab.categoryKeys]);
 
   async function submitAddAsset(e: React.FormEvent) {
@@ -303,19 +338,16 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
                     href={docOpenHref(a.path, true)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    // ✅ force row to respect container width
                     className="block w-full overflow-hidden text-left rounded-2xl border border-black/10 bg-white p-4 hover:bg-black/[0.03] transition"
                   >
-                    {/* ✅ stack on mobile so Download button can't push width */}
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <div className="text-sm font-semibold text-black truncate">{a.title || "Untitled"}</div>
                         <div className="mt-1 text-[12px] text-[#76777B] truncate">
-                          {a.category_key || a.type} • {a.visibility} • {a.path}
+                          {(a.category_key || a.type) ?? ""} • {a.visibility} • {a.path}
                         </div>
                       </div>
 
-                      {/* ✅ mobile: full-width button; desktop: auto */}
                       <div className="w-full sm:w-auto sm:shrink-0">
                         <div className="inline-flex w-full items-center justify-center rounded-xl bg-[#047835] px-3 py-2 text-[12px] font-semibold text-white whitespace-nowrap sm:w-auto">
                           Download →

@@ -12,6 +12,7 @@ type ProductRow = {
   sku: string | null;
   series: string | null;
   section: ProductSection;
+  internal_kind: "tacklebox" | "docs_list" | "contacts_list" | null;
   active: boolean;
 };
 
@@ -32,6 +33,19 @@ function matchesSearch(p: ProductRow, q: string) {
 
 function isInternalRole(role: string) {
   return role === "admin" || role === "anchor_rep";
+}
+
+function productHref(p: ProductRow) {
+  if (p.section === "internal_assets") {
+    if (p.internal_kind === "contacts_list") {
+      return `/internal-assets/contacts/${encodeURIComponent(p.id)}`;
+    }
+    // default internal behavior
+    return `/internal-assets/docs/${encodeURIComponent(p.id)}`;
+  }
+
+  // normal products
+  return `/assets/${encodeURIComponent(p.id)}`;
 }
 
 /**
@@ -107,7 +121,7 @@ export default function AssetsBrowser() {
         // PRODUCTS LIST
         const prodQuery = supabase
           .from("products")
-          .select("id,name,sku,series,section,active")
+          .select("id,name,sku,series,section,internal_kind,active")
           .order("name", { ascending: true });
 
         if (activeOnly) prodQuery.eq("active", true);
@@ -254,7 +268,7 @@ export default function AssetsBrowser() {
               return (
                 <Link
   key={p.id}
-  href={`/assets/${encodeURIComponent(p.id)}`}
+  href={productHref(p)}
   title="Open tackle box"
   className="block w-full overflow-hidden rounded-2xl border border-black/10 bg-white p-4 transition hover:bg-black/[0.03]"
 >

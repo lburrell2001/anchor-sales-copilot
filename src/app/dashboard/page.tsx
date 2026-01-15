@@ -49,6 +49,8 @@ export default function DashboardPage() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
 
+  const [booting, setBooting] = useState(true);
+
   const [loadingChats, setLoadingChats] = useState(true);
   const [recentChats, setRecentChats] = useState<ConversationRow[]>([]);
 
@@ -64,7 +66,98 @@ export default function DashboardPage() {
     router.refresh();
   }
 
-  // System status ping
+  // ✅ ADDITION: extracted loader so we can reuse it (initial + refocus)
+  async function loadRecentDocs() {
+    setLoadingRecentDocs(true);
+    try {
+      // Always include bearer so this works even if cookies still aren’t sticking
+      const { data: sdata } = await supabase.auth.getSession();
+      const token = sdata.session?.access_token;
+
+      // Attempt 1: server endpoint (preferred)
+      let docs: RecentDoc[] = [];
+
+      if (token) {
+        const res = await fetch("/api/recent-docs", {
+          method: "GET",
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        const data = await readJsonSafely<any>(res);
+        docs = Array.isArray(data?.docs) ? (data.docs as RecentDoc[]) : [];
+      }
+
+      // Attempt 2 (fallback): client-side query (shows something even if API breaks)
+      if (!docs.length) {
+        const { data: userData } = await supabase.auth.getUser();
+        const user = userData.user;
+
+        if (user) {
+          const { data, error } = await supabase
+            .from("doc_events")
+            .select("doc_title, doc_type, doc_path, doc_url, created_at")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false })
+            .limit(5);
+
+          if (!error && Array.isArray(data)) docs = data as RecentDoc[];
+        }
+      }
+
+      setRecentDocs(docs.slice(0, 5));
+    } catch {
+      setRecentDocs([]);
+    } finally {
+      setLoadingRecentDocs(false);
+    }
+  }
+
+  // --- BOOT: ensure authed + ensure server cookies exist
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        setBooting(true);
+
+        const { data: sdata } = await supabase.auth.getSession();
+        if (!alive) return;
+
+        const s = sdata.session;
+        if (!s) {
+          router.replace("/");
+          return;
+        }
+
+        // Force cookie sync for server routes (doc-open / recent-docs)
+        const syncRes = await fetch("/api/auth/sync", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            access_token: s.access_token,
+            refresh_token: s.refresh_token,
+          }),
+          cache: "no-store",
+        });
+
+        // Not fatal, but useful when debugging
+        if (!syncRes.ok) {
+          const j = await syncRes.json().catch(() => null);
+          console.warn("auth sync failed", syncRes.status, j);
+        }
+      } finally {
+        if (!alive) return;
+        setBooting(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [router, supabase]);
+
+  // --- System status ping
   useEffect(() => {
     let alive = true;
 
@@ -74,15 +167,11 @@ export default function DashboardPage() {
         if (!alive) return;
 
         setStatus(res.ok ? "online" : "offline");
-        setStatusWhen(
-          new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-        );
+        setStatusWhen(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       } catch {
         if (!alive) return;
         setStatus("offline");
-        setStatusWhen(
-          new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-        );
+        setStatusWhen(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       }
     }
 
@@ -95,11 +184,13 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // Recent chats (Supabase client-side)
+  // --- Recent chats (client-side)
   useEffect(() => {
     let alive = true;
 
     (async () => {
+      if (booting) return;
+
       setLoadingChats(true);
       try {
         const { data: userData } = await supabase.auth.getUser();
@@ -120,12 +211,7 @@ export default function DashboardPage() {
           .limit(5);
 
         if (!alive) return;
-
-        if (error) {
-          setRecentChats([]);
-        } else {
-          setRecentChats((chats || []) as ConversationRow[]);
-        }
+        setRecentChats(error ? [] : ((chats || []) as ConversationRow[]));
       } finally {
         if (!alive) return;
         setLoadingChats(false);
@@ -135,45 +221,36 @@ export default function DashboardPage() {
     return () => {
       alive = false;
     };
-  }, [router, supabase]);
+  }, [booting, router, supabase]);
 
-  // Recent docs opened (API route)
+  // --- Recent docs opened
   useEffect(() => {
     let alive = true;
 
     (async () => {
-      try {
-        setLoadingRecentDocs(true);
-
-        const res = await fetch("/api/recent-docs", { method: "GET", cache: "no-store" });
-        const data = await readJsonSafely<any>(res);
-
-        if (!alive) return;
-
-        if (!res.ok) {
-          setRecentDocs([]);
-          return;
-        }
-
-        const docs = Array.isArray(data?.docs) ? (data.docs as RecentDoc[]) : [];
-        setRecentDocs(docs.slice(0, 5));
-      } catch {
-        if (!alive) return;
-        setRecentDocs([]);
-      } finally {
-        if (!alive) return;
-        setLoadingRecentDocs(false);
-      }
+      if (booting) return;
+      await loadRecentDocs();
     })();
+
+    // ✅ ADDITION: refresh recent docs when user returns to this tab
+    const onFocus = () => {
+      if (booting) return;
+      loadRecentDocs();
+    };
+
+    window.addEventListener("focus", onFocus);
 
     return () => {
       alive = false;
+      window.removeEventListener("focus", onFocus);
     };
-  }, []);
+    // Intentionally no deps: we only want one listener for the life of the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [booting]);
 
   return (
     <main className="min-h-[100svh] min-h-dvh bg-[#FFFFFF] text-[#000000]">
-      {/* Sticky header (like chat) */}
+      {/* Sticky header */}
       <header className="sticky top-0 z-30 bg-[#047835] pt-[env(safe-area-inset-top)]">
         <div className="mx-auto max-w-6xl px-5 py-4">
           <div className="flex items-center justify-between gap-4">
@@ -201,7 +278,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Hero text inside header */}
+        {/* Hero text */}
         <div className="mx-auto max-w-6xl px-5 pb-6">
           <div className="mt-2 flex flex-col gap-2">
             <h1 className="text-3xl font-semibold tracking-tight text-white">Welcome back</h1>
@@ -215,7 +292,7 @@ export default function DashboardPage() {
 
       {/* Body */}
       <div className="mx-auto max-w-6xl px-5 py-8 pb-[calc(2rem+env(safe-area-inset-bottom))]">
-        {/* Quick actions row */}
+        {/* Quick actions */}
         <div className="mb-6 flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center rounded-full bg-[#9CE2BB] px-3 py-1 text-[12px] font-semibold text-[#11500F]">
             Internal tools
@@ -275,7 +352,7 @@ export default function DashboardPage() {
 
         {/* Secondary section */}
         <div className="mt-6 grid gap-5 md:grid-cols-[1fr_360px]">
-          {/* Left: Recent activity */}
+          {/* Left */}
           <div className="rounded-3xl border border-black/10 bg-white p-5">
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">Recent activity</div>
@@ -342,7 +419,7 @@ export default function DashboardPage() {
                 )}
               </div>
 
-              {/* Assets viewed (placeholder) */}
+              {/* Placeholder */}
               <div className="rounded-2xl border border-black/10 bg-[#F6F7F8] p-3">
                 <div className="text-[11px] font-semibold text-black/70">Assets viewed</div>
                 <div className="mt-1 text-sm text-[#76777B]">
@@ -352,7 +429,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Right: stack small cards */}
+          {/* Right */}
           <div className="grid gap-5 self-start">
             <div className="rounded-3xl border border-black/10 bg-white p-5">
               <div className="text-sm font-semibold">Quick links</div>
@@ -390,9 +467,7 @@ export default function DashboardPage() {
               </div>
 
               {statusWhen && (
-                <div className="mt-2 text-[11px] text-[#76777B]">
-                  Last checked: {statusWhen}
-                </div>
+                <div className="mt-2 text-[11px] text-[#76777B]">Last checked: {statusWhen}</div>
               )}
             </div>
           </div>

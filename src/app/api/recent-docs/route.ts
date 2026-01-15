@@ -5,20 +5,33 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request) {
+function getBearerToken(req: Request) {
+  const h = req.headers.get("authorization") || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m?.[1] || null;
+}
+
+export async function GET(req: Request) {
   try {
-    // ✅ session-aware client (reads cookies internally via cookies())
+    // 1) cookie session (if available)
     const supabase = await supabaseRoute();
+    const { data: auth1 } = await supabase.auth.getUser();
+    let user = auth1?.user ?? null;
 
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    const user = auth?.user;
+    // 2) Bearer fallback (works when auth is client-only)
+    if (!user) {
+      const token = getBearerToken(req);
+      if (token) {
+        const { data: auth2, error: auth2Err } = await supabaseAdmin.auth.getUser(token);
+        if (!auth2Err) user = auth2?.user ?? null;
+      }
+    }
 
-    // If not logged in, just return empty list (non-fatal)
-    if (authErr || !user) {
+    // fail-soft for UI
+    if (!user) {
       return NextResponse.json({ docs: [] }, { status: 200 });
     }
 
-    // ✅ pull last 5 doc opens for this user (service role bypasses RLS)
     const { data, error } = await supabaseAdmin
       .from("doc_events")
       .select("doc_title, doc_type, doc_path, doc_url, created_at")
@@ -32,7 +45,6 @@ export async function GET(_req: Request) {
 
     return NextResponse.json({ docs: data || [] }, { status: 200 });
   } catch {
-    // fail soft — this endpoint is non-critical UI sugar
     return NextResponse.json({ docs: [] }, { status: 200 });
   }
 }
