@@ -154,6 +154,37 @@ const SPECIAL_PREFIXES_BY_NAME: Record<string, string[]> = {
   "Roof Mounted Guardrail": ["solutions/roof-guardrail"],
   "Wall Mounted Guardrail": ["solutions/wall-guardrail"],
   "Wall Mounted Box": ["solutions/wall-box"],
+
+    // --- ANCHORS (exact name -> exact folder) ---
+  "U2000 KEE": ["anchor/u-anchors/u2000/kee"],
+  "U2000 PVC": ["anchor/u-anchors/u2000/pvc"],
+  "U2000 TPO": ["anchor/u-anchors/u2000/tpo"],
+
+  "U2200 Plate": ["anchor/u-anchors/u2200/plate"],
+
+  "U2400 EDPM": ["anchor/u-anchors/u2400/edpm"],
+  "U2400 KEE": ["anchor/u-anchors/u2400/kee"],
+  "U2400 PVC": ["anchor/u-anchors/u2400/pvc"],
+  "U2400 TPO": ["anchor/u-anchors/u2400/tpo"],
+
+  "U2600 APP": ["anchor/u-anchors/u2600/app"],
+  "U2600 SBS": ["anchor/u-anchors/u2600/sbs"],
+  "U2600 SBS Torch": ["anchor/u-anchors/u2600/sbs-torch"],
+
+  "U2800 Coatings": ["anchor/u-anchors/u2800/coatings"],
+
+  "U3200 Plate": ["anchor/u-anchors/u3200/plate"],
+
+  "U3400 EDPM": ["anchor/u-anchors/u3400/edpm"],
+  "U3400 KEE": ["anchor/u-anchors/u3400/kee"],
+  "U3400 PVC": ["anchor/u-anchors/u3400/pvc"],
+  "U3400 TPO": ["anchor/u-anchors/u3400/tpo"],
+
+  "U3600 APP": ["anchor/u-anchors/u3600/app"],
+  "U3600 SBS": ["anchor/u-anchors/u3600/sbs"],
+  "U3600 SBS Torch": ["anchor/u-anchors/u3600/sbs-torch"],
+
+  "U3800 Coatings": ["anchor/u-anchors/u3800/coatings"],
 };
 
 /**
@@ -167,6 +198,37 @@ const SERIES_ROOTS_BY_SERIES: Record<string, string[]> = {
   "Snow Retention": ["2pipe", "solutions/snow-retention", "solutions/2pipe"],
   "Snow Retention Solutions": ["2pipe", "solutions/snow-retention", "solutions/2pipe"],
   "2 Pipe": ["2pipe", "solutions/snow-retention", "solutions/2pipe"],
+
+    // --- ANCHORS (exact name -> exact folder) ---
+  "U2000 KEE": ["anchor/u-anchors/u2000/kee"],
+  "U2000 PVC": ["anchor/u-anchors/u2000/pvc"],
+  "U2000 TPO": ["anchor/u-anchors/u2000/tpo"],
+
+  "U2200 Plate": ["anchor/u-anchors/u2200/plate"],
+
+  "U2400 EPDM": ["anchor/u-anchors/u2400/epdm"],
+  "U2400 KEE": ["anchor/u-anchors/u2400/kee"],
+  "U2400 PVC": ["anchor/u-anchors/u2400/pvc"],
+  "U2400 TPO": ["anchor/u-anchors/u2400/tpo"],
+
+  "U2600 APP": ["anchor/u-anchors/u2600/app"],
+  "U2600 SBS": ["anchor/u-anchors/u2600/sbs"],
+  "U2600 SBS Torch": ["anchor/u-anchors/u2600/sbs-torch"],
+
+  "U2800 Coatings": ["anchor/u-anchors/u2800/coatings"],
+
+  "U3200 Plate": ["anchor/u-anchors/u3200/plate"],
+
+  "U3400 EPDM": ["anchor/u-anchors/u3400/epdm"],
+  "U3400 KEE": ["anchor/u-anchors/u3400/kee"],
+  "U3400 PVC": ["anchor/u-anchors/u3400/pvc"],
+  "U3400 TPO": ["anchor/u-anchors/u3400/tpo"],
+
+  "U3600 APP": ["anchor/u-anchors/u3600/app"],
+  "U3600 SBS": ["anchor/u-anchors/u3600/sbs"],
+  "U3600 SBS Torch": ["anchor/u-anchors/u3600/sbs-torch"],
+
+  "U3800 Coatings": ["anchor/u-anchors/u3800/coatings"],
 };
 
 /* ---------------------------------------------
