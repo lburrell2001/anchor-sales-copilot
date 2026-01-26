@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function filenameFromPath(path: string) {
-  const clean = path.split("?")[0];
+  const clean = String(path || "").split("?")[0];
   return clean.split("/").pop() || "document";
 }
 
@@ -17,6 +17,11 @@ function getBearerToken(req: Request) {
   return m?.[1] || null;
 }
 
+// Safer filename for Content-Disposition (no quotes/newlines)
+function safeFilename(name: string) {
+  return name.replace(/[\r\n"]/g, "").trim() || "document";
+}
+
 export async function GET(req: Request) {
   try {
     // 1) cookie session (if available)
@@ -24,7 +29,7 @@ export async function GET(req: Request) {
     const { data: auth1, error: authErr } = await supabase.auth.getUser();
     let user = auth1?.user ?? null;
 
-    // 2) bearer fallback (doesn't affect existing <a> usage; helps fetch-based callers)
+    // 2) bearer fallback (helps fetch-based callers)
     if (!user) {
       const token = getBearerToken(req);
       if (token) {
@@ -45,13 +50,13 @@ export async function GET(req: Request) {
     const BUCKET = "knowledge";
 
     const { data, error } = await supabaseAdmin.storage.from(BUCKET).createSignedUrl(path, 60 * 10);
-
     const signed = data?.signedUrl;
+
     if (error || !signed) {
       return NextResponse.json({ error: error?.message || "Sign failed" }, { status: 500 });
     }
 
-    // ✅ ADDITION: best-effort logging (do not block serving the file)
+    // ✅ best-effort logging (do not block serving the file)
     try {
       await supabaseAdmin.from("doc_events").insert({
         user_id: user.id,
@@ -61,19 +66,31 @@ export async function GET(req: Request) {
         doc_url: null,
       });
     } catch {
-      // ignore logging failures
+      // ignore
     }
 
-    if (!download) return NextResponse.redirect(signed, { status: 302 });
-
+    // ✅ Proxy the file so iOS can open/share reliably
     const upstream = await fetch(signed);
     if (!upstream.ok) {
       return NextResponse.json({ error: `Fetch failed: ${upstream.status}` }, { status: 502 });
     }
 
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const filename = filenameFromPath(path);
+    const filename = safeFilename(filenameFromPath(path));
 
+    // ✅ Inline open (best for mobile/in-app)
+    if (!download) {
+      return new NextResponse(upstream.body, {
+        status: 200,
+        headers: {
+          "Content-Type": contentType,
+          "Content-Disposition": `inline; filename="${filename}"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    // ✅ Download (forces Save / Files)
     return new NextResponse(upstream.body, {
       status: 200,
       headers: {

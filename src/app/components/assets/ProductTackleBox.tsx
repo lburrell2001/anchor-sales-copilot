@@ -1,3 +1,4 @@
+// src/components/assets/ProductTackleBox.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -33,19 +34,62 @@ type AssetRow = {
 
 type ProfileRow = { id: string; role: string };
 
-type TabKey = "all" | "spec" | "data" | "install" | "sales" | "pics" | "other";
+/**
+ * Tabs are auto-generated from what's actually in storage.
+ * Tabs only render if they have >= 1 visible item (public users won't see internal-only tabs).
+ */
+type TabKey =
+  | "all"
+  | "spec"
+  | "data"
+  | "install"
+  | "sales"
+  | "intake"
+  | "test"
+  | "pricebook"
+  | "approval"
+  | "presentation"
+  | "pics"
+  | "case"
+  | "other";
 
-const TAB_DEFS: { key: TabKey; label: string; visibility?: "public" | "internal" }[] = [
-  { key: "all", label: "All", visibility: "public" },
-  { key: "spec", label: "Spec", visibility: "public" },
-  { key: "data", label: "Data Sheet", visibility: "public" },
-  { key: "install", label: "Install Guide", visibility: "public" },
-  { key: "sales", label: "Sales Sheet", visibility: "public" },
-  { key: "pics", label: "Pictures", visibility: "public" },
-  { key: "other", label: "Other", visibility: "public" },
+const TAB_LABELS: Record<TabKey, string> = {
+  all: "All",
+  spec: "Spec",
+  data: "Data Sheet",
+  install: "Install Guide",
+  sales: "Sales Sheet",
+  intake: "Intake Forms",
+  test: "Test Reports",
+  pricebook: "Pricebook",
+  approval: "Manufacturer Approval Letters",
+  presentation: "Presentation",
+  pics: "Pictures",
+  case: "Case Studies",
+  other: "Other",
+};
+
+const TAB_ORDER: TabKey[] = [
+  "all",
+  "spec",
+  "data",
+  "install",
+  "sales",
+  "intake",
+  "test",
+  "pricebook",
+  "approval",
+  "presentation",
+  "pics",
+  "case",
+  "other",
 ];
 
+// Tabs that should only appear for internal users
+const INTERNAL_ONLY_TABS = new Set<TabKey>(["test", "pricebook"]);
+
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "svg", "gif"]);
+const PDF_EXTS = new Set(["pdf"]);
 
 /* ---------------------------------------------
    Helpers
@@ -55,9 +99,14 @@ function normalizePrefix(p: string) {
   return String(p || "").trim().replace(/^\/+|\/+$/g, "");
 }
 
-function docOpenHref(path: string, download = true) {
+/**
+ * IMPORTANT for iOS/app-like behavior:
+ * - download=0 should open inline (Quick Look / in-app viewer) if your /api/doc-open supports it
+ * - download=1 forces attachment download
+ */
+function docOpenHref(path: string, download: boolean) {
   const p = String(path || "").trim();
-  return `/api/doc-open?path=${encodeURIComponent(p)}${download ? "&download=1" : ""}`;
+  return `/api/doc-open?path=${encodeURIComponent(p)}${download ? "&download=1" : "&download=0"}`;
 }
 
 function basename(path: string) {
@@ -89,7 +138,7 @@ function slugifyName(name: string) {
     .replace(/(^-|-$)/g, "");
 }
 
-// Defensive (your API already filters folders, but keep safe)
+// Defensive
 function isFolderLike(path: string) {
   const p = String(path || "").trim();
   if (!p) return true;
@@ -98,212 +147,165 @@ function isFolderLike(path: string) {
   return !b.includes(".");
 }
 
+/**
+ * Make internal-only content disappear from public users everywhere (including "All").
+ * We mark:
+ * - anything under /internal/
+ * - anything under /pricebook/ or /test/ or /test-reports/
+ * as internal.
+ */
 function visibilityFromPath(path: string): "public" | "internal" {
   const p = String(path || "").toLowerCase();
+
   if (p.includes("/internal/") || p.startsWith("internal/")) return "internal";
+  if (p.includes("/pricebook/") || p.includes("/test/") || p.includes("/test-reports/")) return "internal";
+
   return "public";
 }
 
 function typeFromPath(path: string) {
   const ext = extOf(path);
-  return IMAGE_EXTS.has(ext) ? "image" : "document";
+  if (IMAGE_EXTS.has(ext)) return "image";
+  if (ext === "pdf") return "document";
+  return "document";
 }
 
 /* ---------------------------------------------
-   Storage Routing Rules
+   ✅ Routing rules (you already tuned these for solutions)
+   NOTE: for anchors, you’ll likely use SPECIAL_PREFIXES_BY_NAME (best)
+   or SERIES_ROOTS_BY_SERIES mapping that points to anchor/... roots.
 --------------------------------------------- */
 
-/**
- * ✅ YOUR BUCKET REALITY (based on your screenshots)
- * - Solutions are under roots like: hvac/, pipe-frame/, roof-box/, etc.
- * - Anchors are NOT under anchor/<slug>/...
- *   They are under membrane roots like:
- *   - tpo/...
- *   - pvc/...
- *   - kee/...
- *   …and inside that you have nested folders like:
- *   tpo/u-anchors/u2000/kee/tpo/ (example you showed)
- *
- * So for anchors, we generate smart candidates from:
- * - membrane root (tpo/pvc/kee)
- * - family (u-anchors)
- * - model (u2000/u2200/...)
- * - possible “leaf membrane” folder again (tpo/pvc/kee)
- * - plus legacy fallbacks
- */
-
-/**
- * Exact product name → known folder(s)
- * (Use this for any weird one-off cases.)
- */
 const SPECIAL_PREFIXES_BY_NAME: Record<string, string[]> = {
+  // Solutions (examples)
   "2 Pipe Snow Fence": ["2pipe/2pipe", "solutions/snow-retention/2pipe", "solutions/2pipe/2pipe"],
   "Snow Fence": ["2pipe/snow-fence", "solutions/snow-retention/snow-fence", "solutions/2pipe/snow-fence"],
   "HVAC Tie Down": ["solutions/hvac"],
-
   "Roof Mounted Box": ["solutions/roof-box"],
-
   "Attached Pipe Frame": ["pipe-frame/attached", "solutions/pipe-frame/attached", "attached"],
-  "Existing Pipe Frame": [
-    // ✅ fix your typo: existing (not exisiting)
-    "pipe-frame/existing",
-    "solutions/pipe-frame/existing",
-    "existing",
-  ],
-
+  // NOTE: you had a typo earlier "exisiting" — keep only correct spelling unless your bucket truly uses the typo
+  "Existing Pipe Frame": ["pipe-frame/existing", "solutions/pipe-frame/existing", "existing"],
   "Roof Mounted Guardrail": ["solutions/roof-guardrail"],
   "Wall Mounted Guardrail": ["solutions/wall-guardrail"],
   "Wall Mounted Box": ["solutions/wall-box"],
 
-    // --- ANCHORS (exact name -> exact folder) ---
+  // ✅ Anchors (add these if your Product names match exactly)
   "U2000 KEE": ["anchor/u-anchors/u2000/kee"],
   "U2000 PVC": ["anchor/u-anchors/u2000/pvc"],
   "U2000 TPO": ["anchor/u-anchors/u2000/tpo"],
-
   "U2200 Plate": ["anchor/u-anchors/u2200/plate"],
-
-  "U2400 EDPM": ["anchor/u-anchors/u2400/edpm"],
+  "U2400 EDPM": ["anchor/u-anchors/u2400/epdm"],
   "U2400 KEE": ["anchor/u-anchors/u2400/kee"],
   "U2400 PVC": ["anchor/u-anchors/u2400/pvc"],
   "U2400 TPO": ["anchor/u-anchors/u2400/tpo"],
-
   "U2600 APP": ["anchor/u-anchors/u2600/app"],
   "U2600 SBS": ["anchor/u-anchors/u2600/sbs"],
   "U2600 SBS Torch": ["anchor/u-anchors/u2600/sbs-torch"],
-
   "U2800 Coatings": ["anchor/u-anchors/u2800/coatings"],
-
   "U3200 Plate": ["anchor/u-anchors/u3200/plate"],
-
   "U3400 EDPM": ["anchor/u-anchors/u3400/edpm"],
   "U3400 KEE": ["anchor/u-anchors/u3400/kee"],
   "U3400 PVC": ["anchor/u-anchors/u3400/pvc"],
   "U3400 TPO": ["anchor/u-anchors/u3400/tpo"],
-
   "U3600 APP": ["anchor/u-anchors/u3600/app"],
   "U3600 SBS": ["anchor/u-anchors/u3600/sbs"],
   "U3600 SBS Torch": ["anchor/u-anchors/u3600/sbs-torch"],
-
   "U3800 Coatings": ["anchor/u-anchors/u3800/coatings"],
 };
 
-/**
- * Series → possible roots (solutions)
- * Keep these minimal and true.
- */
 const SERIES_ROOTS_BY_SERIES: Record<string, string[]> = {
+  // Solutions
   HVAC: ["solutions/hvac"],
   "HVAC Solutions": ["solutions/hvac"],
-
   "Snow Retention": ["2pipe", "solutions/snow-retention", "solutions/2pipe"],
   "Snow Retention Solutions": ["2pipe", "solutions/snow-retention", "solutions/2pipe"],
   "2 Pipe": ["2pipe", "solutions/snow-retention", "solutions/2pipe"],
 
-    // --- ANCHORS (exact name -> exact folder) ---
-  "U2000 KEE": ["anchor/u-anchors/u2000/kee"],
-  "U2000 PVC": ["anchor/u-anchors/u2000/pvc"],
-  "U2000 TPO": ["anchor/u-anchors/u2000/tpo"],
-
-  "U2200 Plate": ["anchor/u-anchors/u2200/plate"],
-
-  "U2400 EPDM": ["anchor/u-anchors/u2400/epdm"],
-  "U2400 KEE": ["anchor/u-anchors/u2400/kee"],
-  "U2400 PVC": ["anchor/u-anchors/u2400/pvc"],
-  "U2400 TPO": ["anchor/u-anchors/u2400/tpo"],
-
-  "U2600 APP": ["anchor/u-anchors/u2600/app"],
-  "U2600 SBS": ["anchor/u-anchors/u2600/sbs"],
-  "U2600 SBS Torch": ["anchor/u-anchors/u2600/sbs-torch"],
-
-  "U2800 Coatings": ["anchor/u-anchors/u2800/coatings"],
-
-  "U3200 Plate": ["anchor/u-anchors/u3200/plate"],
-
-  "U3400 EPDM": ["anchor/u-anchors/u3400/epdm"],
-  "U3400 KEE": ["anchor/u-anchors/u3400/kee"],
-  "U3400 PVC": ["anchor/u-anchors/u3400/pvc"],
-  "U3400 TPO": ["anchor/u-anchors/u3400/tpo"],
-
-  "U3600 APP": ["anchor/u-anchors/u3600/app"],
-  "U3600 SBS": ["anchor/u-anchors/u3600/sbs"],
-  "U3600 SBS Torch": ["anchor/u-anchors/u3600/sbs-torch"],
-
-  "U3800 Coatings": ["anchor/u-anchors/u3800/coatings"],
+  // Anchors (optional series mapping if you use series = "U-Anchors" etc.)
+  "U-Anchors": ["anchor/u-anchors"],
+  "U Anchors": ["anchor/u-anchors"],
+  Anchors: ["anchor"],
 };
 
 /* ---------------------------------------------
-   Anchor routing (NEW)
---------------------------------------------- */
-
-const MEMBRANE_ROOTS = ["tpo", "pvc", "kee"] as const;
-
-function normalizeSeriesKey(s: string) {
-  return String(s || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-}
-
-function detectMembrane(p: ProductRow): (typeof MEMBRANE_ROOTS)[number] | null {
-  const series = normalizeSeriesKey(p.series || "");
-  const name = String(p.name || "").toLowerCase();
-
-  // prefer series if it contains it
-  for (const m of MEMBRANE_ROOTS) {
-    if (series.includes(m)) return m;
-  }
-  // fallback: detect in name
-  for (const m of MEMBRANE_ROOTS) {
-    if (name.includes(m)) return m;
-  }
-  return null;
-}
-
-function detectAnchorModelFolder(p: ProductRow): string | null {
-  const name = String(p.name || "").toLowerCase();
-
-  // matches: U-2000, U2000, u 2000, etc.
-  const m = name.match(/\bu\s*[- ]?\s*(\d{4})\b/);
-  if (m?.[1]) return `u${m[1]}`; // u2000
-  return null;
-}
-
-function detectAnchorFamilyFolder(p: ProductRow): string | null {
-  const name = String(p.name || "").toLowerCase();
-  // right now your screenshot shows u-anchors. Keep it simple:
-  if (name.includes("u-") || name.includes("u ")) return "u-anchors";
-  if (name.includes("u anchor") || name.includes("uanchor")) return "u-anchors";
-  // if you add other families later, add detection here.
-  return "u-anchors";
-}
-
-/* ---------------------------------------------
-   Tabs
+   Tabs (auto-detect from filenames/folders)
 --------------------------------------------- */
 
 function tabFromPath(path: string): TabKey {
-  const file = basename(path).toLowerCase();
+  const p = String(path || "").toLowerCase();
+  const file = basename(p);
 
+  // Global spec
   if (file === basename(GLOBAL_SPEC_PATH).toLowerCase()) return "spec";
 
-  // standard filenames you’re using
-  if (file === "data-sheet.pdf") return "data";
-  if (file === "sales-sheet.pdf") return "sales";
-  if (file === "install-sheet.pdf" || file === "install-manual.pdf") return "install";
+  // Spec
+  if (p.includes("/spec/") || file.includes("spec")) return "spec";
 
-  // you showed a file named product-data-sheet.pdf too
-  if (file === "product-data-sheet.pdf") return "data";
+  // Data sheet
+  if (
+    file === "data-sheet.pdf" ||
+    file === "product-data-sheet.pdf" ||
+    file.includes("data-sheet") ||
+    file.includes("datasheet")
+  )
+    return "data";
 
+  // Sales sheet
+  if (file === "sales-sheet.pdf" || file.includes("sales-sheet") || file.includes("salessheet")) return "sales";
+
+  // Install
+  if (
+    file === "install-manual.pdf" ||
+    file === "install-sheet.pdf" ||
+    file.includes("install") ||
+    file.includes("installation")
+  )
+    return "install";
+
+  // Intake forms
+  if (p.includes("/intake/") || file.includes("intake")) return "intake";
+
+  // Test reports (internal)
+  if (
+    p.includes("/test/") ||
+    p.includes("/test-reports/") ||
+    file.includes("test-report") ||
+    file.includes("test_report") ||
+    file.includes("uplift") ||
+    file.includes("astm") ||
+    file.includes("fm-")
+  )
+    return "test";
+
+  // Pricebook (internal)
+  if (p.includes("/pricebook/") || file.includes("pricebook") || file.includes("pricing") || file.includes("price-book"))
+    return "pricebook";
+
+  // Manufacturer approval letters
+  if (p.includes("/approval/") || p.includes("/approvals/") || file.includes("approval") || file.includes("letter"))
+    return "approval";
+
+  // Presentation
+  if (file.endsWith(".ppt") || file.endsWith(".pptx") || p.includes("/presentation/") || file.includes("presentation"))
+    return "presentation";
+
+  // Case studies
+  if (p.includes("/case-studies/") || file.includes("case-study") || file.includes("case_study")) return "case";
+
+  // Pictures
   const ext = extOf(file);
   if (IMAGE_EXTS.has(ext)) return "pics";
 
   return "other";
 }
 
+/**
+ * Optional badge (still useful for pipe-frame split / or any "attached/existing" subfolders)
+ */
 function groupBadgeFromPath(path: string): string | null {
   const p = String(path || "").toLowerCase();
-  if (p.includes("/attached/") || p.startsWith("attached/") || p.includes("pipe-frame/attached/")) return "Attached";
-  if (p.includes("/existing/") || p.startsWith("existing/") || p.includes("pipe-frame/existing/")) return "Existing";
+  if (p.includes("/attached/")) return "Attached";
+  if (p.includes("/existing/")) return "Existing";
   return null;
 }
 
@@ -337,7 +339,7 @@ function prefixCandidatesForProduct(p: ProductRow): string[] {
     if (clean) out.push(clean);
   };
 
-  // 1) Exact overrides
+  // 1) Exact overrides (best for anchors)
   const specials = SPECIAL_PREFIXES_BY_NAME[p.name];
   if (specials?.length) return Array.from(new Set(specials.map(normalizePrefix)));
 
@@ -345,60 +347,24 @@ function prefixCandidatesForProduct(p: ProductRow): string[] {
   const seriesKey = String(p.series || "").trim();
   const section = String(p.section || "").toLowerCase().trim();
 
-  // 2) ✅ ANCHORS: use the real bucket layout you showed
-  if (section === "anchor" || section === "anchors") {
-    const membrane = detectMembrane(p); // tpo|pvc|kee
-    const family = detectAnchorFamilyFolder(p); // u-anchors
-    const model = detectAnchorModelFolder(p); // u2000, u2200...
-
-    // These are ordered MOST likely → least likely based on your screenshot pattern
-    if (membrane && family && model) {
-      // matches: tpo/u-anchors/u2000/tpo
-      push(`${membrane}/${family}/${model}/${membrane}`);
-
-      // matches: tpo/u-anchors/u2000
-      push(`${membrane}/${family}/${model}`);
-
-      // matches: u-anchors/u2000/tpo
-      push(`${family}/${model}/${membrane}`);
-
-      // matches: u-anchors/u2000
-      push(`${family}/${model}`);
-
-      // matches: tpo/u2000/tpo (if you ever remove family level)
-      push(`${membrane}/${model}/${membrane}`);
-
-      // matches: tpo/u2000
-      push(`${membrane}/${model}`);
-    }
-
-    // If we ONLY know membrane, still try sane options:
-    if (membrane) {
-      push(`${membrane}/${slug}`);
-      push(`${membrane}`);
-    }
-
-    // legacy fallbacks (if you ever move anchors under anchor/)
-    push(`anchor/${slug}`);
-    push(`anchor/${slug}/${slug}`);
-
-    // last-ditch
-    push(`${slug}`);
-
-    return Array.from(new Set(out));
-  }
-
-  // 3) ✅ SOLUTIONS (existing behavior)
+  // 2) Series roots
   const roots = SERIES_ROOTS_BY_SERIES[seriesKey] || [];
   for (const root of roots) {
+    // typical: root/<slug>/*
     push(`${root}/${slug}`);
     push(`${root}/${slug}/${slug}`);
-    push(`${root}`); // safe fallback
   }
 
+  // 3) Generic layouts
   if (section === "solution" || section === "solutions") {
     push(`solutions/${slug}`);
     push(`solutions/${slug}/${slug}`);
+  }
+
+  if (section === "anchor" || section === "anchors") {
+    // NOTE: your bucket uses "anchor/..." not "anchors/..."
+    push(`anchor/${slug}`);
+    push(`anchor/${slug}/${slug}`);
   }
 
   if (section === "internal" || section === "internal_assets") {
@@ -406,7 +372,7 @@ function prefixCandidatesForProduct(p: ProductRow): string[] {
     push(`internal/${slug}/${slug}`);
   }
 
-  // 4) Extra safe fallbacks
+  // 4) Extra fallbacks
   push(`${slug}`);
   push(`${slug}/${slug}`);
 
@@ -542,7 +508,7 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
         product_id: (p as ProductRow).id,
         title: titleFromPath(path),
         type: typeFromPath(path),
-        category_key: tabFromPath(path),
+        category_key: tabFromPath(path), // informational only
         path,
         visibility: visibilityFromPath(path),
         created_at: new Date().toISOString(),
@@ -591,18 +557,100 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
     return Array.from(byPath.values());
   }, [storageAssets, dbAssets]);
 
-  const counts = useMemo(() => {
-    const visible = isInternalUser ? assets : assets.filter((a) => a.visibility !== "internal");
-    const pub = visible.filter((a) => a.visibility === "public").length;
-    const internal = isInternalUser ? visible.filter((a) => a.visibility === "internal").length : 0;
-    return { pub, internal };
+  // Public users should not see internal assets at all
+  const visibleAssets = useMemo(() => {
+    return isInternalUser ? assets : assets.filter((a) => a.visibility !== "internal");
   }, [assets, isInternalUser]);
 
+  // Counts for header chip
+  const counts = useMemo(() => {
+    const pub = visibleAssets.filter((a) => a.visibility === "public").length;
+    const internal = isInternalUser ? visibleAssets.filter((a) => a.visibility === "internal").length : 0;
+    return { pub, internal };
+  }, [visibleAssets, isInternalUser]);
+
+  // Auto-tab generation (only render tabs that have items)
+  const tabCounts = useMemo(() => {
+    const counts: Record<TabKey, number> = {
+      all: visibleAssets.length,
+      spec: 0,
+      data: 0,
+      install: 0,
+      sales: 0,
+      intake: 0,
+      test: 0,
+      pricebook: 0,
+      approval: 0,
+      presentation: 0,
+      pics: 0,
+      case: 0,
+      other: 0,
+    };
+
+    for (const a of visibleAssets) {
+      const k = tabFromPath(a.path);
+      counts[k] = (counts[k] || 0) + 1;
+    }
+
+    // if not internal, force-hide internal-only tabs
+    if (!isInternalUser) {
+      for (const k of INTERNAL_ONLY_TABS) counts[k] = 0;
+    }
+
+    return counts;
+  }, [visibleAssets, isInternalUser]);
+
+  const availableTabs = useMemo(() => {
+    return TAB_ORDER.filter((k) => k === "all" || tabCounts[k] > 0);
+  }, [tabCounts]);
+
+  // Keep activeTab valid if its tab disappears (e.g. switch user role)
+  useEffect(() => {
+    if (!availableTabs.includes(activeTab)) setActiveTab("all");
+  }, [availableTabs, activeTab]);
+
   const filtered = useMemo(() => {
-    const visible = isInternalUser ? assets : assets.filter((a) => a.visibility !== "internal");
-    if (activeTab === "all") return visible;
-    return visible.filter((a) => tabFromPath(a.path) === activeTab);
-  }, [assets, isInternalUser, activeTab]);
+    if (activeTab === "all") return visibleAssets;
+    return visibleAssets.filter((a) => tabFromPath(a.path) === activeTab);
+  }, [visibleAssets, activeTab]);
+
+  function isPdf(path: string) {
+    return PDF_EXTS.has(extOf(path));
+  }
+
+  // "Open" should be inline (good for iOS Quick Look / in-app viewer)
+  function openInline(path: string) {
+    window.location.href = docOpenHref(path, false);
+  }
+
+  function forceDownload(path: string) {
+    window.location.href = docOpenHref(path, true);
+  }
+
+  async function shareAsset(path: string) {
+    // Share a link that works on iOS. This endpoint should redirect to a signed URL.
+    const url = new URL(docOpenHref(path, false), window.location.origin).toString();
+    const title = titleFromPath(path);
+
+    try {
+      // Web Share API (iOS Safari supports this)
+      if (navigator.share) {
+        await navigator.share({ title, text: title, url });
+        return;
+      }
+    } catch {
+      // user cancelled or share failed — fall through to copy
+    }
+
+    try {
+      await navigator.clipboard.writeText(url);
+      setFormMsg("Link copied.");
+      setTimeout(() => setFormMsg(null), 1500);
+    } catch {
+      setFormMsg("Couldn’t share or copy link.");
+      setTimeout(() => setFormMsg(null), 1500);
+    }
+  }
 
   async function submitAddAsset(e: React.FormEvent) {
     e.preventDefault();
@@ -663,17 +711,7 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
                   {product?.section ? ` • ${product.section}` : ""}
                 </div>
 
-                {storagePrefix ? (
-                  <div className="mt-2 text-[12px] text-black/40">
-                    Storage prefix (picked): <span className="font-mono">{storagePrefix}/</span>
-                  </div>
-                ) : null}
-
-                {triedPrefixes.length ? (
-                  <div className="mt-1 text-[12px] text-black/35">
-                    Tried: <span className="font-mono">{triedPrefixes.join(" • ")}</span>
-                  </div>
-                ) : null}
+                
               </div>
 
               <div className="shrink-0 flex flex-wrap items-center gap-2">
@@ -696,20 +734,20 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
             </div>
           </div>
 
-          {/* Tabs */}
+          {/* Tabs (auto-generated; only show tabs with content) */}
           <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-            {TAB_DEFS.map((t) => {
-              const on = t.key === activeTab;
+            {availableTabs.map((key) => {
+              const on = key === activeTab;
               return (
                 <button
-                  key={t.key}
-                  onClick={() => setActiveTab(t.key)}
+                  key={key}
+                  onClick={() => setActiveTab(key)}
                   className={`shrink-0 rounded-full border px-4 py-2 text-[12px] font-semibold transition ${
                     on ? "border-[#047835] bg-[#047835] text-white" : "border-black/10 bg-white text-black hover:bg-black/[0.03]"
                   }`}
                   type="button"
                 >
-                  {t.label}
+                  {TAB_LABELS[key]}
                 </button>
               );
             })}
@@ -719,8 +757,11 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
           <div className="mt-4 rounded-3xl border border-black/10 bg-white p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-black">{TAB_DEFS.find((t) => t.key === activeTab)?.label}</div>
-                <div className="mt-1 text-sm text-[#76777B]">Click an item to open/download via signed URL.</div>
+                <div className="text-sm font-semibold text-black">{TAB_LABELS[activeTab]}</div>
+                <div className="mt-1 text-sm text-[#76777B]">
+                  Tap <span className="font-semibold">Open</span> to view inline (best for mobile). Use{" "}
+                  <span className="font-semibold">Share</span> to send like iOS.
+                </div>
               </div>
 
               <div className="text-[12px] text-black/50 shrink-0">
@@ -732,22 +773,17 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
               {filtered.length === 0 ? (
                 <div className="rounded-2xl border border-black/10 bg-[#F6F7F8] p-4 text-sm text-black/60">
                   Nothing in this tab yet.
-                  {storagePrefix ? (
-                    <div className="mt-2 text-[12px] text-black/40">
-                      Picked prefix: <span className="font-mono">{storagePrefix}/</span>
-                    </div>
-                  ) : null}
+                  
                 </div>
               ) : (
                 filtered.map((a) => {
                   const badge = groupBadgeFromPath(a.path);
+                  const pdf = isPdf(a.path);
+
                   return (
-                    <a
+                    <div
                       key={a.id}
-                      href={docOpenHref(a.path, true)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block w-full overflow-hidden tfext-left rounded-2xl border border-black/10 bg-white p-4 hover:bg-black/[0.03] transition"
+                      className="w-full overflow-hidden rounded-2xl border border-black/10 bg-white p-4"
                     >
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
@@ -758,19 +794,57 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
                                 {badge}
                               </span>
                             ) : null}
+                            {a.visibility === "internal" ? (
+                              <span className="shrink-0 rounded-full bg-black/5 px-2 py-0.5 text-[11px] font-semibold text-black/70">
+                                Internal
+                              </span>
+                            ) : null}
                           </div>
+
                           <div className="mt-1 text-[12px] text-[#76777B] truncate">
-                            {typeFromPath(a.path)} • {a.visibility} • {a.path}
+                            {typeFromPath(a.path)} • {a.path}
                           </div>
                         </div>
 
-                        <div className="w-full sm:w-auto sm:shrink-0">
-                          <div className="inline-flex w-full items-center justify-center rounded-xl bg-[#047835] px-3 py-2 text-[12px] font-semibold text-white whitespace-nowrap sm:w-auto">
-                            Download →
-                          </div>
+                        {/* Actions */}
+<div className="w-full sm:w-auto sm:shrink-0">
+  <div className="flex w-full gap-2 sm:justify-end">
+    {/* Open only for inline-friendly files */}
+    {["pdf", "png", "jpg", "jpeg"].includes(extOf(a.path)) && (
+      <button
+        type="button"
+        onClick={() => openInline(a.path)}
+        className="inline-flex flex-1 sm:flex-none items-center justify-center rounded-xl bg-[#047835] px-3 py-2 text-[12px] font-semibold text-white whitespace-nowrap"
+      >
+        Open →
+      </button>
+    )}
+
+    {/* Share (iOS / mobile friendly) */}
+    <button
+      type="button"
+      onClick={() => shareAsset(a.path)}
+      className="inline-flex flex-1 sm:flex-none items-center justify-center rounded-xl border border-black/10 bg-white px-3 py-2 text-[12px] font-semibold text-black whitespace-nowrap hover:bg-black/[0.03]"
+    >
+      Share
+    </button>
+
+    {/* Always allow download */}
+    <button
+      type="button"
+      onClick={() => forceDownload(a.path)}
+      className="inline-flex flex-1 sm:flex-none items-center justify-center rounded-xl border border-black/10 bg-white px-3 py-2 text-[12px] font-semibold text-black whitespace-nowrap hover:bg-black/[0.03]"
+    >
+      Download
+    </button>
+  </div>
+</div>
+
+
+                          
                         </div>
                       </div>
-                    </a>
+                    
                   );
                 })
               )}
@@ -802,6 +876,12 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
                   <option value="data_sheet">data_sheet</option>
                   <option value="install_sheet">install_sheet</option>
                   <option value="sales_sheet">sales_sheet</option>
+                  <option value="intake_forms">intake_forms</option>
+                  <option value="test_reports">test_reports</option>
+                  <option value="pricebook">pricebook</option>
+                  <option value="approval_letters">approval_letters</option>
+                  <option value="presentation">presentation</option>
+                  <option value="case_studies">case_studies</option>
                   <option value="other">other</option>
                 </select>
 
@@ -828,7 +908,7 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
                 <input
                   value={form.path}
                   onChange={(e) => setForm((s) => ({ ...s, path: e.target.value }))}
-                  placeholder="knowledge path (e.g. tpo/u-anchors/u2000/tpo/data-sheet.pdf)"
+                  placeholder="knowledge path (e.g. anchor/u-anchors/u2000/kee/data-sheet.pdf)"
                   className="h-10 sm:col-span-4 rounded-2xl border border-black/10 bg-[#F6F7F8] px-4 text-sm outline-none focus:border-[#047835]"
                 />
 
