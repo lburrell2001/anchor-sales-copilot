@@ -148,34 +148,6 @@ function looksLikeDocsOnlyRequest(text: string) {
 
   return docNouns.test(t) && !advisory.test(t);
 }
-async function tryFoldersForDocs(
-  req: Request,
-  baseFolder: string,
-  membrane: "tpo" | "pvc" | "epdm",
-  limit = 20
-): Promise<{ folder: string | null; docs: RecommendedDoc[] }> {
-  const base = (baseFolder || "").replace(/^\/+/, "").replace(/\/+$/, "");
-
-  // Try common variants (prefix swap + optional membrane subfolder)
-  const candidates = Array.from(
-    new Set([
-      base,
-      `${base}/${membrane}`,
-      base.replace(/^anchor\//, "anchors/"),
-      `${base.replace(/^anchor\//, "anchors/")}/${membrane}`,
-      base.replace(/^anchors\//, "anchor/"),
-      `${base.replace(/^anchors\//, "anchor/")}/${membrane}`,
-    ])
-  ).filter(Boolean);
-
-  for (const f of candidates) {
-    const docs = await fetchDocsFromDocsRoute(req, "", limit, 0, f);
-    if (docs && docs.length > 0) return { folder: f, docs };
-  }
-
-  return { folder: null, docs: [] };
-}
-
 
 function isResidentialIntent(text: string) {
   const t = (text || "").toLowerCase();
@@ -257,15 +229,14 @@ function looksTemplated(answer: string) {
 function containsEngineeringOutput(answer: string) {
   const t = (answer || "").toLowerCase();
 
-  const numericLoads = /\b(\d+(\.\d+)?\s*(psf|kpa|kip|kips|lb|lbs|pounds|n|kn|mph))\b/i;
+  // Only treat explicit numeric design guidance as “engineering output”
+  const numericLoads =
+    /\b(\d+(\.\d+)?\s*(psf|kpa|kip|kips|lb|lbs|pounds|n|kn|mph))\b/i;
 
-  const spacing =
+  const spacingOC =
     /\b(\d+(\.\d+)?\s*(inches|inch|in|ft|feet|mm|cm|m))\b.*\b(o\.?c\.?|on\s*center)\b/i;
 
-  const counts =
-    /\b(use|need|required|minimum)\b.*\b(\d+)\b.*\b(anchor|anchors|attachment|attachments)\b/i;
-
-  return numericLoads.test(t) || spacing.test(t) || counts.test(t);
+  return numericLoads.test(t) || spacingOC.test(t);
 }
 
 function toResponsesInput(messages: SimpleMsg[]) {
@@ -631,29 +602,25 @@ export async function POST(req: Request) {
     let recommendedDocs: RecommendedDoc[] = [];
     let siteSnippets: SiteSnippet[] = [];
 
-     if (readyForDocs) {
-  if (matchedFolder) {
-    const tried = await tryFoldersForDocs(req, matchedFolder, ctx.membrane, 20);
-    matchedFolder = tried.folder; // may add /tpo or swap anchor<->anchors
-    recommendedDocs = mergeDocsUniqueByPath(tried.docs);
-  }
+    if (readyForDocs) {
+      if (matchedFolder) {
+        const folderDocs = await fetchDocsFromDocsRoute(req, "", 20, 0, matchedFolder);
+        recommendedDocs = mergeDocsUniqueByPath(folderDocs);
+      } else {
+        // fallback search (still works even if folder match fails)
+        const q1 = `u-anchor ${ctx.membrane} ${ctx.securing}`;
+        const q2 = `u anchor ${ctx.membrane} ${ctx.securing}`;
+        const q3 = `${ctx.membrane} ${ctx.securing} u-anchor`;
 
-  // fallback keyword search only if folder match produced nothing
-  if (recommendedDocs.length === 0) {
-    const q1 = `u-anchor ${ctx.membrane} ${ctx.securing}`;
-    const q2 = `u anchor ${ctx.membrane} ${ctx.securing}`;
-    const q3 = `${ctx.membrane} ${ctx.securing} u-anchor`;
+        const [docs1, docs2, docs3] = await Promise.all([
+          fetchDocsFromDocsRoute(req, q1, 20, 0),
+          fetchDocsFromDocsRoute(req, q2, 20, 0),
+          fetchDocsFromDocsRoute(req, q3, 20, 0),
+        ]);
 
-    const [docs1, docs2, docs3] = await Promise.all([
-      fetchDocsFromDocsRoute(req, q1, 20, 0),
-      fetchDocsFromDocsRoute(req, q2, 20, 0),
-      fetchDocsFromDocsRoute(req, q3, 20, 0),
-    ]);
-
-    recommendedDocs = mergeDocsUniqueByPath(docs1, docs2, docs3);
-  }
-}
-
+        recommendedDocs = mergeDocsUniqueByPath(docs1, docs2, docs3);
+      }
+    }
 
     // Grounding/snippets only if user asked for docs AND gate is satisfied
     const includeGrounding = userAskedForDocs(userText) && readyForDocs;
