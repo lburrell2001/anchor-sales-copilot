@@ -1,6 +1,5 @@
 // src/app/api/knowledge-list/route.ts
 import { NextResponse } from "next/server";
-import { supabaseRoute } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -18,8 +17,21 @@ function cleanPrefix(p: string) {
   return String(p || "").trim().replace(/^\/+|\/+$/g, "");
 }
 
+function isInternalPath(path: string) {
+  const p = String(path || "").toLowerCase();
+  return (
+    p.includes("/internal/") ||
+    p.startsWith("internal/") ||
+    p.includes("/pricebook/") ||
+    p.includes("/test/") ||
+    p.includes("/test-reports/")
+  );
+}
+
 async function listRecursive(bucket: string, prefix: string) {
   const root = cleanPrefix(prefix);
+  if (!root) return [];
+
   const out: string[] = [];
   const queue: string[] = [root];
   const seen = new Set<string>();
@@ -38,7 +50,8 @@ async function listRecursive(bucket: string, prefix: string) {
         sortBy: { column: "name", order: "asc" },
       });
 
-      if (error) throw error;
+      // Folder doesn't exist / not listable → stop this branch
+      if (error) break;
 
       const items = (data || []) as StorageItem[];
       if (items.length === 0) break;
@@ -47,12 +60,8 @@ async function listRecursive(bucket: string, prefix: string) {
         const name = String(item?.name || "").trim();
         if (!name) continue;
 
-        // ✅ FIX: metadata is not reliable; id is.
-        // Folders usually have id === null.
-        // Fallback: if no extension and metadata null, treat as folder.
         const hasExt = name.includes(".");
         const isFolder = item.id === null || (!hasExt && item.metadata == null);
-
         const fullPath = dir ? `${dir}/${name}` : name;
 
         if (isFolder) queue.push(fullPath);
@@ -69,22 +78,19 @@ async function listRecursive(bucket: string, prefix: string) {
 
 export async function GET(req: Request) {
   try {
-    const supabase = await supabaseRoute();
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    const user = auth?.user ?? null;
-
-    if (authErr || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const url = new URL(req.url);
     const prefixRaw = (url.searchParams.get("prefix") || "").trim();
     const prefix = cleanPrefix(prefixRaw);
 
     if (!prefix) return NextResponse.json({ paths: [] }, { status: 200 });
 
+    // ✅ Always list using admin (works on mobile even without cookies)
     const paths = await listRecursive("knowledge", prefix);
-    return NextResponse.json({ paths }, { status: 200 });
+
+    // ✅ IMPORTANT: if you want this endpoint to be public, filter internal here
+    const publicOnly = paths.filter((p) => !isInternalPath(p));
+
+    return NextResponse.json({ paths: publicOnly }, { status: 200 });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
   }

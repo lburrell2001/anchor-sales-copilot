@@ -315,12 +315,18 @@ function groupBadgeFromPath(path: string): string | null {
    API fetch
 --------------------------------------------- */
 
-async function fetchKnowledgePaths(prefix: string) {
+async function fetchKnowledgePaths(supabase: ReturnType<typeof supabaseBrowser>, prefix: string) {
   const cleanPrefix = normalizePrefix(prefix);
+
+  // ✅ mobile-safe: attach Bearer token
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData?.session?.access_token || "";
+
   const res = await fetch(`/api/knowledge-list?prefix=${encodeURIComponent(cleanPrefix)}`, {
     method: "GET",
-    credentials: "include",
+    credentials: "include", // keep cookies for desktop
     cache: "no-store",
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
   });
 
   const json = await res.json().catch(() => ({}));
@@ -329,6 +335,7 @@ async function fetchKnowledgePaths(prefix: string) {
   const paths = (json?.paths as string[]) || [];
   return paths.filter((p) => !isFolderLike(p));
 }
+
 
 /* ---------------------------------------------
    Prefix probing
@@ -491,15 +498,15 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
 
       for (const candidate of candidates) {
         try {
-          const got = await fetchKnowledgePaths(candidate);
+          const got = await fetchKnowledgePaths(supabase, candidate);
           if (got.length > 0) {
             pickedPrefix = candidate;
             paths = got;
             break;
           }
-        } catch {
-          // ignore
-        }
+        } catch (e) {
+  console.warn("knowledge-list failed for prefix:", candidate, e);
+}
       }
 
       setStoragePrefix(normalizePrefix(pickedPrefix));

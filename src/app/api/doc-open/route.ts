@@ -1,3 +1,4 @@
+// src/app/api/doc-open/route.ts
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { supabaseRoute } from "@/lib/supabase/server";
@@ -34,25 +35,75 @@ function contentTypeFor(path: string) {
   return "application/octet-stream";
 }
 
+function isInternalPath(path: string) {
+  const p = String(path || "").toLowerCase();
+  return (
+    p.includes("/internal/") ||
+    p.startsWith("internal/") ||
+    p.includes("/pricebook/") ||
+    p.includes("/test/") ||
+    p.includes("/test-reports/")
+  );
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
   const path = normalizePathInput(searchParams.get("path") || "");
   const download = searchParams.get("download") === "1";
 
+  // ✅ NEW: allow token via query param for mobile (because window.location can't send headers)
+  const tokenFromQuery = (searchParams.get("token") || "").trim();
+
   if (!path) return NextResponse.json({ error: "Missing path" }, { status: 400 });
 
-  // Keep if docs should require login
-  const supabase = await supabaseRoute();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  /* ------------------------------------------------
+     ✅ Auth (cookie OR bearer OR token query)
+     - If no auth, we still allow PUBLIC docs
+     - Internal docs still require auth
+  ------------------------------------------------- */
 
-  // ✅ Inline view: redirect to signed URL (fast + mobile-friendly)
+  let user: any = null;
+
+  // 1) Cookie-based auth (desktop)
+  try {
+    const supabase = await supabaseRoute();
+    const { data: auth, error: authErr } = await supabase.auth.getUser();
+    if (!authErr && auth?.user) user = auth.user;
+  } catch {
+    // ignore
+  }
+
+  // 2) Bearer token auth (if you ever fetch doc-open with headers)
+  if (!user) {
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.toLowerCase().startsWith("bearer ")
+      ? authHeader.slice(7).trim()
+      : "";
+
+    if (token) {
+      const { data, error } = await supabaseAdmin.auth.getUser(token);
+      if (!error && data?.user) user = data.user;
+    }
+  }
+
+  // 3) Token from query string (mobile-safe)
+  if (!user && tokenFromQuery) {
+    const { data, error } = await supabaseAdmin.auth.getUser(tokenFromQuery);
+    if (!error && data?.user) user = data.user;
+  }
+
+  // 4) If still not authed, only allow PUBLIC paths
+  if (!user && isInternalPath(path)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  /* ------------------------------------------------
+     ✅ INLINE VIEW: redirect to signed URL
+  ------------------------------------------------- */
+
   if (!download) {
-    const { data, error } = await supabaseAdmin
-      .storage
-      .from("knowledge")
-      .createSignedUrl(path, 60 * 30);
+    const { data, error } = await supabaseAdmin.storage.from("knowledge").createSignedUrl(path, 60 * 30);
 
     if (error || !data?.signedUrl) {
       return NextResponse.json({ error: "Could not create signed url" }, { status: 500 });
@@ -61,10 +112,11 @@ export async function GET(req: Request) {
     return NextResponse.redirect(data.signedUrl, 302);
   }
 
-  // ✅ Download: PROXY the file so we can force attachment reliably
-  const { data: file, error: dlErr } = await supabaseAdmin.storage
-    .from("knowledge")
-    .download(path);
+  /* ------------------------------------------------
+     ✅ DOWNLOAD: proxy so attachment is forced
+  ------------------------------------------------- */
+
+  const { data: file, error: dlErr } = await supabaseAdmin.storage.from("knowledge").download(path);
 
   if (dlErr || !file) {
     return NextResponse.json({ error: "Could not download file" }, { status: 500 });
@@ -79,9 +131,7 @@ export async function GET(req: Request) {
     headers: {
       "Content-Type": contentType,
       "Content-Disposition": `attachment; filename="${filename}"`,
-      // helps some browsers not sniff
       "X-Content-Type-Options": "nosniff",
-      // optional: reduce caching issues for signed content
       "Cache-Control": "no-store",
     },
   });
