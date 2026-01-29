@@ -108,6 +108,30 @@ function docOpenHref(path: string, download: boolean) {
   const p = String(path || "").trim();
   return `/api/doc-open?path=${encodeURIComponent(p)}${download ? "&download=1" : "&download=0"}`;
 }
+// ✅ NEW: mobile-safe doc-open (adds token as query param when available)
+async function docOpenHrefWithToken(
+  supabase: ReturnType<typeof supabaseBrowser>,
+  path: string,
+  download: boolean
+) {
+  const p = String(path || "").trim();
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token || "";
+  const t = token ? `&token=${encodeURIComponent(token)}` : "";
+  return `/api/doc-open?path=${encodeURIComponent(p)}${download ? "&download=1" : "&download=0"}${t}`;
+}
+
+// ✅ NEW: download without leaving the current page (prevents the black screen)
+function triggerDownload(href: string, filename?: string) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.rel = "noopener";
+  // If same-origin, download attr helps. If cross-origin, browser may ignore it (still okay).
+  if (filename) a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 
 function basename(path: string) {
   const clean = String(path || "").split("?")[0];
@@ -628,13 +652,19 @@ export default function ProductTackleBox({ productId }: { productId: string }) {
   }
 
   // "Open" should be inline (good for iOS Quick Look / in-app viewer)
-  function openInline(path: string) {
-    window.location.href = docOpenHref(path, false);
-  }
+  async function openInline(path: string) {
+  const href = await docOpenHrefWithToken(supabase, path, false);
+  // ✅ open a new tab/window so the library page stays put
+  window.open(href, "_blank", "noopener,noreferrer");
+}
 
-  function forceDownload(path: string) {
-    window.location.href = docOpenHref(path, true);
-  }
+
+  async function forceDownload(path: string) {
+  const href = await docOpenHrefWithToken(supabase, path, true);
+  // ✅ don't navigate away; just trigger download
+  triggerDownload(href, basename(path));
+}
+
 
   async function shareAsset(path: string) {
     // Share a link that works on iOS. This endpoint should redirect to a signed URL.
