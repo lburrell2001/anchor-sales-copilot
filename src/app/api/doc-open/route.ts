@@ -9,45 +9,84 @@ function normalizePathInput(s: string) {
   return decodeURIComponent((s || "").trim()).replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
+function filenameFromPath(path: string) {
+  const clean = String(path || "").split("?")[0];
+  return clean.split("/").pop() || "download";
+}
+
+function extOf(path: string) {
+  const m = filenameFromPath(path).toLowerCase().match(/\.([a-z0-9]+)$/);
+  return m ? m[1] : "";
+}
+
+function contentTypeFor(path: string) {
+  const ext = extOf(path);
+  if (ext === "pdf") return "application/pdf";
+  if (ext === "png") return "image/png";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "webp") return "image/webp";
+  if (ext === "svg") return "image/svg+xml";
+  if (ext === "mp4") return "video/mp4";
+  if (ext === "docx")
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (ext === "pptx")
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  return "application/octet-stream";
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
   const path = normalizePathInput(searchParams.get("path") || "");
   const download = searchParams.get("download") === "1";
 
-  if (!path) {
-    return NextResponse.json({ error: "Missing path" }, { status: 400 });
-  }
+  if (!path) return NextResponse.json({ error: "Missing path" }, { status: 400 });
 
-  // Optional: keep this if docs should only work for logged-in users
+  // Keep if docs should require login
   const supabase = await supabaseRoute();
   const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!auth.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // ✅ Inline view: redirect to signed URL (fast + mobile-friendly)
+  if (!download) {
+    const { data, error } = await supabaseAdmin
+      .storage
+      .from("knowledge")
+      .createSignedUrl(path, 60 * 30);
+
+    if (error || !data?.signedUrl) {
+      return NextResponse.json({ error: "Could not create signed url" }, { status: 500 });
+    }
+
+    return NextResponse.redirect(data.signedUrl, 302);
   }
 
-  const { data, error } = await supabaseAdmin
-    .storage
+  // ✅ Download: PROXY the file so we can force attachment reliably
+  const { data: file, error: dlErr } = await supabaseAdmin.storage
     .from("knowledge")
-    .createSignedUrl(path, 60 * 30);
+    .download(path);
 
-  if (error || !data?.signedUrl) {
-    return NextResponse.json({ error: "Could not create signed url" }, { status: 500 });
+  if (dlErr || !file) {
+    return NextResponse.json({ error: "Could not download file" }, { status: 500 });
   }
 
-  // If you want "download" behavior for some cases, you can hint it with headers.
-  // (Note: cross-origin + storage may ignore this sometimes, but it doesn't hurt.)
-  if (download) {
-    const res = NextResponse.redirect(data.signedUrl, 302);
-    res.headers.set("Content-Disposition", "attachment");
-    return res;
-  }
+  const arrayBuf = await file.arrayBuffer();
+  const filename = filenameFromPath(path);
+  const contentType = contentTypeFor(path);
 
-  // ✅ Best for desktop + mobile: redirect to the signed URL
-  return NextResponse.redirect(data.signedUrl, 302);
+  return new NextResponse(arrayBuf, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      // helps some browsers not sniff
+      "X-Content-Type-Options": "nosniff",
+      // optional: reduce caching issues for signed content
+      "Cache-Control": "no-store",
+    },
+  });
 }
 
-// Nice-to-have so preflight/health checks don't 405
 export async function HEAD() {
   return new NextResponse(null, { status: 200 });
 }
