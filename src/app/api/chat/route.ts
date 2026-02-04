@@ -101,11 +101,6 @@ function containsEngineeringOutput(answer: string) {
 function sanitizeAnswer(answer: string) {
   let a = (answer || "").toString();
 
-  a = a.replace(
-    /\b(2000[-\s]?series|3000[-\s]?series|u\s?\d{4})\b/gi,
-    ""
-  );
-
   a = a.replace(/\b(send|email|text)\b.*\b(doc|docs|pdf|sheet)\b/gi, "");
   a = a.replace(/^\s*(yes|sure|absolutely|of course)\b[,\s:-]*/i, "");
   a = a.replace(/\s{2,}/g, " ").trim();
