@@ -372,6 +372,22 @@ export const CANONICAL_SOLUTIONS: CanonicalSolution[] = [
   },
 
   // ----------------------------
+  // HVAC (existing mechanical tie-down)
+  // ----------------------------
+  {
+    key: "hvac-existing-tie-down",
+    match: /\b(hvac|rtu|rooftop\s*unit|air\s*handler|mechanical\s*unit)\b/i,
+    securing: "hvac",
+    storageFolder: "solutions/hvac",
+    anchorType: "guy-wire",
+    keywords: ["hvac", "rtu", "mechanical", "tie-down", "existing"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
+    summary:
+      "HVAC units are typically stabilized using a mechanical tie-down approach with guy wire kits and 2000-series anchors.",
+  },
+
+  // ----------------------------
   // Elevated stack (roof vs wall)
   // ----------------------------
   {

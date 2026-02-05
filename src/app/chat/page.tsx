@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/browser";
-import ChatSidebar from "@/app/components/ChatSidebar";
 import SourcesFeedback from "../components/chat/SourcesFeedback";
 
 type UserType = "internal" | "external";
@@ -162,11 +161,9 @@ export default function ChatPage() {
 
   // sidebar list
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
-  const [convoLoading, setConvoLoading] = useState(true);
 
   // UI
   const [historyLoading, setHistoryLoading] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // chat
   const [input, setInput] = useState("");
@@ -263,7 +260,7 @@ export default function ChatPage() {
 
   const loadConversations = useCallback(
     async (uid: string) => {
-      setConvoLoading(true);
+      // no sidebar; keep list for auto-title only
       try {
         const { data, error } = await supabase
           .from("conversations")
@@ -279,7 +276,7 @@ export default function ChatPage() {
         setConversations(list);
         return list;
       } finally {
-        setConvoLoading(false);
+        // no sidebar; keep list for auto-title only
       }
     },
     [supabase]
@@ -513,6 +510,35 @@ export default function ChatPage() {
     });
   }
 
+  function extractMemoryFromMessages(msgs: Msg[]) {
+    const text = msgs.map((m) => m.content).join("\n").toLowerCase();
+    const mem: { membrane?: string; series?: string; surface?: string; condition?: string } = {};
+
+    if (/\btpo\b/.test(text)) mem.membrane = "TPO";
+    else if (/\bpvc\b/.test(text)) mem.membrane = "PVC";
+    else if (/\bepdm\b/.test(text)) mem.membrane = "EPDM";
+    else if (/\bkee\b/.test(text)) mem.membrane = "KEE";
+    else if (/\bapp\b/.test(text)) mem.membrane = "APP";
+    else if (/\bsbs[-\s]?torch\b/.test(text)) mem.membrane = "SBS-Torch";
+    else if (/\bsbs\b/.test(text)) mem.membrane = "SBS";
+
+    if (/\b2000[-\s]?series\b|\bseries\s*2000\b/.test(text)) mem.series = "2000-Series";
+    else if (/\b3000[-\s]?series\b|\bseries\s*3000\b/.test(text)) mem.series = "3000-Series";
+
+    if (/\bparapet|wall\b/.test(text)) mem.surface = "Wall/Parapet";
+    else if (/\broof|rooftop\b/.test(text)) mem.surface = "Roof";
+
+    if (/\b(existing|retrofit|re[-\s]?secure|re[-\s]?tie|tie[-\s]?down)\b/.test(text)) {
+      mem.condition = "Existing / Re-secure";
+    } else if (/\bnew install|new\b/.test(text)) {
+      mem.condition = "New Install";
+    }
+
+    return mem;
+  }
+
+  const memory = useMemo(() => extractMemoryFromMessages(messages), [messages]);
+
   const ready = !profileLoading && !historyLoading && !!userId && !!conversationId;
   const inputDisabled = !ready;
 
@@ -636,16 +662,6 @@ async function send() {
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
           {/* Left: brand + menu */}
           <div className="flex min-w-0 items-center gap-3">
-            {/* Mobile menu */}
-            <button
-              type="button"
-              onClick={() => setSidebarOpen((v) => !v)}
-              className="md:hidden h-9 rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
-              aria-label="Open chat menu"
-            >
-              Menu
-            </button>
-
             {/* Brand */}
             <button
               type="button"
@@ -667,6 +683,15 @@ async function send() {
 
           {/* Right: actions */}
           <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="h-9 rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
+              title="Refresh chat"
+              aria-label="Refresh chat"
+            >
+              Refresh
+            </button>
             {!profileLoading && role === "admin" ? (
               <button
                 type="button"
@@ -704,70 +729,37 @@ async function send() {
       {/* Body */}
       <div className="flex-1">
         <div className="mx-auto max-w-6xl px-4 py-4">
-          {/* ✅ 2 columns now (sidebar + chat) */}
-          <div className="flex flex-col gap-4 md:grid md:h-[calc(100svh-64px)] md:grid-cols-[280px_1fr]">
-            {/* Desktop sidebar */}
-            <aside className={`hidden md:flex ${PANEL} flex-col min-h-0`}>
-              <div className={`${PANEL_BODY} ${SOFT_SCROLL} bg-transparent`}>
-                <ChatSidebar
-                  conversations={conversations.map((c) => ({
-                    id: c.id,
-                    title: c.title,
-                    updated_at: c.updated_at || c.created_at || null,
-                  }))}
-                  activeId={conversationId}
-                  loading={convoLoading}
-                  onNewChat={newChat}
-                  onSelect={switchConversation}
-                  onRename={renameConversation}
-                  onDelete={deleteConversation}
-                />
-              </div>
-            </aside>
-
-            {/* Mobile sidebar drawer */}
-            {sidebarOpen && (
-              <div className="md:hidden fixed inset-0 z-40">
-                <div className="absolute inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
-                <aside className={`absolute left-3 right-3 top-16 bottom-3 ${PANEL} flex flex-col min-h-0`}>
-                  <ChatSidebar
-                    conversations={conversations.map((c) => ({
-                      id: c.id,
-                      title: c.title,
-                      updated_at: c.updated_at || c.created_at || null,
-                    }))}
-                    activeId={conversationId}
-                    loading={convoLoading}
-                    onNewChat={() => {
-                      newChat();
-                      setSidebarOpen(false);
-                    }}
-                    onClose={() => setSidebarOpen(false)}
-                    onSelect={(id) => {
-                      switchConversation(id);
-                      setSidebarOpen(false);
-                    }}
-                    onRename={renameConversation}
-                    onDelete={deleteConversation}
-                  />
-                </aside>
-              </div>
-            )}
-
+          <div className="flex flex-col gap-4">
             {/* Chat panel */}
-            <section
-              className={[
-                PANEL,
-                "flex flex-col",
-                "h-[calc(100svh-64px)] md:h-full",
-                "min-h-0",
-                "shrink-0",
-              ].join(" ")}
-            >
+            <section className={[PANEL, "flex flex-col", "h-[calc(100svh-64px)]", "min-h-0"].join(" ")}>
               <div className={PANEL_HEADER}>
                 <div className={`text-xs ${MUTED}`}>
                   Ask like: “U2400 EPDM install manual + data sheet” or “HVAC solution docs”
                 </div>
+                {(memory.membrane || memory.series || memory.surface || memory.condition) && (
+                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-black/70">
+                    {memory.membrane && (
+                      <span className="rounded-full border border-black/10 bg-white px-2 py-1">
+                        Membrane: {memory.membrane}
+                      </span>
+                    )}
+                    {memory.series && (
+                      <span className="rounded-full border border-black/10 bg-white px-2 py-1">
+                        Series: {memory.series}
+                      </span>
+                    )}
+                    {memory.surface && (
+                      <span className="rounded-full border border-black/10 bg-white px-2 py-1">
+                        Surface: {memory.surface}
+                      </span>
+                    )}
+                    {memory.condition && (
+                      <span className="rounded-full border border-black/10 bg-white px-2 py-1">
+                        Condition: {memory.condition}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Messages */}
