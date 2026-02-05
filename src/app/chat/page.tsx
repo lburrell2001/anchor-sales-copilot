@@ -324,7 +324,6 @@ export default function ChatPage() {
       if (!userId) return;
 
       if (cid === conversationId) {
-        setSidebarOpen(false);
         return;
       }
 
@@ -334,7 +333,6 @@ export default function ChatPage() {
       setLastSources([]);
       setSessionId(null);
       setInput("");
-      setSidebarOpen(false);
       setShowFeedback(false);
 
       await loadConversationMessages(userId, cid);
@@ -495,7 +493,6 @@ export default function ChatPage() {
     if (!created?.id) return;
 
     setConversationId(created.id);
-    setSidebarOpen(false);
 
     await loadConversations(userId);
     setMessages([DEFAULT_GREETING]);
