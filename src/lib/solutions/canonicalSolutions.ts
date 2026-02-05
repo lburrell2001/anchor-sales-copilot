@@ -1,291 +1,454 @@
+// src/lib/solutions/canonicalSolutions.ts
+
+export type AnchorType = "2000" | "3000" | "guy-wire" | "unknown";
+export type Membrane = "tpo" | "pvc" | "epdm" | "sbs" | "sbs-torch" | "app" | "kee" | "coatings" | null;
+
+export type DocKind =
+  | "sales_sheet"
+  | "data_sheet"
+  | "product_data_sheet"
+  | "install_manual"
+  | "install_sheet"
+  | "install_video"
+  | "cad_dwg"
+  | "cad_step"
+  | "product_drawing"
+  | "product_image"
+  | "render"
+  | "asset"
+  | "unknown";
+
+/**
+ * Your storage taxonomy is foldered by solution + variant (ex: pipe-frame/attached).
+ * So "Securing" should represent a *real* bucket route, not loose words like "attached".
+ */
+export type Securing =
+  | "solar"
+
+  // snow-retention/
+  | "snow-retention/2-pipe-snow-fence"
+  | "snow-retention/unitized-snow-fence"
+  | "snow-retention"
+
+  // boxes/
+  | "roof-box"
+  | "wall-box"
+
+  // misc solutions/
+  | "electrical-disconnect"
+  | "hvac"
+  | "guy-wire-kit"
+  | "equipment-screen"
+  | "signage"
+  | "lightning"
+  | "light-mount"
+  | "camera-mount"
+  | "antenna"
+  | "satellite-dish"
+  | "weather-station"
+
+  // pipe-frame/
+  | "pipe-frame/attached"
+  | "pipe-frame/existing"
+  | "duct-securement"
+
+  // elevated-stack/
+  | "elevated-stack/roof-stack"
+  | "elevated-stack/wall-stack"
+  | "elevated-stack"
+
+  // roof-stairs-walkways/
+  | "roof-stairs-walkways/double-stair"
+  | "roof-stairs-walkways/single-stair"
+  | "roof-stairs-walkways/walkways"
+  | "roof-stairs-walkways"
+
+  // roof-pipe/
+  | "roof-pipe/adjustable"
+  | "roof-pipe/double"
+  | "roof-pipe/roller"
+  | "roof-pipe/single"
+  | "roof-pipe"
+
+  // guardrail + ladder (as shown in your storage list)
+  | "roof-guardrail"
+  | "wall-guardrail"
+  | "roof-ladder"
+
+  | "unknown";
+
+/**
+ * ChatGPT-like “slot filling”:
+ * We infer a securing route, then ask only what’s missing for doc routing.
+ */
+export type IntakeState = {
+  securing?: Securing | null;
+  anchorType?: AnchorType | null;
+  membrane?: Membrane;
+  isExisting?: boolean | null;
+
+  /** helps disambiguate roof vs wall variants where applicable */
+  mountSurface?: "roof" | "wall" | "unknown" | null;
+
+  /** lightweight variant for solutions with subfolders */
+  variant?:
+    | "2-pipe"
+    | "unitized"
+    | "attached"
+    | "existing"
+    | "roof-stack"
+    | "wall-stack"
+    | "double-stair"
+    | "single-stair"
+    | "walkways"
+    | "adjustable"
+    | "double"
+    | "roller"
+    | "single"
+    | null;
+
+  wants?: DocKind[];
+};
+
+export type AskStep = {
+  key:
+    | "securing"
+    | "isExisting"
+    | "membrane"
+    | "anchorType"
+    | "mountSurface"
+    | "variant"
+    | "wants";
+  question: string;
+  options?: string[];
+  shouldAsk: (s: IntakeState) => boolean;
+  hint?: Partial<IntakeState>;
+};
+
 export type CanonicalSolution = {
   key: string;
   match: RegExp;
+
   summary: string;
+
+  /** normalized intent (aligned to storage) */
+  securing: Securing;
+
+  /** best default (can still be overridden by user / future logic) */
+  anchorType: AnchorType;
+
+  /** folder prefix inside knowledge bucket (relative path) */
+  storageFolder?: string;
+
+  keywords?: string[];
+  ask?: AskStep[];
+  recommendedDocKinds?: DocKind[];
 };
 
+/* ---------------------------------------------
+   Default Ask Flow
+--------------------------------------------- */
+
+const ASK_MEMBRANE: AskStep = {
+  key: "membrane",
+  question: "What roof membrane are you on (TPO, PVC, EPDM), or not sure?",
+  options: ["TPO", "PVC", "EPDM", "Not sure"],
+  shouldAsk: (s) => !s.membrane || s.membrane === null,
+};
+
+const ASK_EXISTING: AskStep = {
+  key: "isExisting",
+  question: "Is this a new install or re-securing existing equipment?",
+  options: ["New install", "Existing / re-secure", "Not sure"],
+  shouldAsk: (s) => s.isExisting === null || typeof s.isExisting === "undefined",
+};
+
+const ASK_ANCHOR_TYPE: AskStep = {
+  key: "anchorType",
+  question:
+    "Do you know the attachment type (2000-series, 3000-series, guy wire kit), or should I infer it?",
+  options: ["2000-series", "3000-series", "Guy wire kit", "Infer it"],
+  shouldAsk: (s) => !s.anchorType || s.anchorType === null || s.anchorType === "unknown",
+};
+
+const ASK_WANTS: AskStep = {
+  key: "wants",
+  question: "Which sheets do you need?",
+  options: [
+    "Sales sheet",
+    "Data sheet",
+    "Install manual",
+    "Install sheet",
+    "Install video",
+    "CAD (DWG/STEP)",
+    "Images/renders",
+  ],
+  shouldAsk: (s) => !Array.isArray(s.wants) || s.wants.length === 0,
+};
+
+const ASK_MOUNT_SURFACE: AskStep = {
+  key: "mountSurface",
+  question: "Is this roof-mounted or wall/parapet-mounted?",
+  options: ["Roof-mounted", "Wall/Parapet-mounted", "Not sure"],
+  shouldAsk: (s) =>
+    (s.securing === "roof-box" ||
+      s.securing === "wall-box" ||
+      s.securing === "elevated-stack" ||
+      s.securing === "roof-guardrail" ||
+      s.securing === "wall-guardrail") &&
+    (!s.mountSurface || s.mountSurface === null || s.mountSurface === "unknown"),
+};
+
+/* ---------------------------------------------
+   Helpers
+--------------------------------------------- */
+
+export function nextQuestionForSolution(sol: CanonicalSolution, state: IntakeState) {
+  const steps = sol.ask ?? [];
+  for (const step of steps) {
+    if (step.shouldAsk(state)) return step;
+  }
+  return null;
+}
+
+export function formatSheetRecommendations(sol: CanonicalSolution, state: IntakeState) {
+  const wants =
+    state.wants?.length
+      ? state.wants
+      : sol.recommendedDocKinds?.length
+        ? sol.recommendedDocKinds
+        : ["data_sheet", "install_sheet", "sales_sheet"];
+
+  const membrane =
+    state.membrane && state.membrane !== "unknown" ? state.membrane.toUpperCase() : "most membranes";
+  const anchorType =
+    state.anchorType && state.anchorType !== "unknown" ? state.anchorType : sol.anchorType;
+
+  return [
+    `Recommended sheets for **${sol.securing}** (${membrane}, ${anchorType}):`,
+    wants
+      .map((k) => {
+        switch (k) {
+          case "sales_sheet":
+            return "• Sales sheet";
+          case "data_sheet":
+            return "• Data sheet";
+          case "product_data_sheet":
+            return "• Product data sheet";
+          case "install_manual":
+            return "• Install manual";
+          case "install_sheet":
+            return "• Install sheet";
+          case "install_video":
+            return "• Install video";
+          case "cad_dwg":
+            return "• CAD (DWG)";
+          case "cad_step":
+            return "• CAD (STEP)";
+          case "product_drawing":
+            return "• Product drawing";
+          case "product_image":
+            return "• Product images";
+          case "render":
+            return "• Renders";
+          default:
+            return "• Specs / assets";
+        }
+      })
+      .join("\n"),
+    `Grab these in **Asset Management** (folder: ${sol.storageFolder || sol.securing}).`,
+  ].join("\n");
+}
+
+/* ---------------------------------------------
+   Canonical Solutions
+   (includes your new alias: "roof-mounted h-frame" == pipe-frame/attached)
+--------------------------------------------- */
+
 export const CANONICAL_SOLUTIONS: CanonicalSolution[] = [
-  // -------------------------
-  // Solar
-  // -------------------------
   {
     key: "solar",
     match: /\b(solar|pv|p\.?v\.?|photovoltaic|panel(?:s)?|array(?:s)?|racking|rack(?:s)?|rail(?:s)?)\b/i,
+    securing: "solar",
+    storageFolder: "solutions/solar",
+    anchorType: "2000",
+    keywords: ["strut", "rail", "racking", "pv"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet", "install_manual", "cad_dwg", "cad_step"],
+    ask: [ASK_MEMBRANE, ASK_ANCHOR_TYPE, ASK_WANTS],
     summary:
-      "Solar racking systems are typically supported using membrane-compatible rooftop attachments that provide stable connection points without penetrating the roof assembly. At Anchor, solar installations commonly use 2000-series anchors paired with strut or rail systems, allowing long-term stability while accommodating movement and exposure. Anchors are matched to the roof membrane to maintain watertight integrity.",
+      "Solar racking is typically supported using membrane-compatible rooftop attachments that provide stable connection points without compromising the roof system.",
   },
 
-  // -------------------------
-  // 2 Pipe Snow Fence
-  // -------------------------
+  // ----------------------------
+  // Snow retention (foldered)
+  // ----------------------------
   {
     key: "2-pipe-snow-fence",
-    match: /\b(2\s*pipe\s*snow\s*fence|two\s*pipe\s*snow\s*fence|2[-\s]*pipe\s*fence|two[-\s]*pipe\s*fence)\b/i,
+    match: /\b((2|two)\s*[- ]?\s*pipe\b.*\b(snow\s*(retention|fence)|snow\s*guard|avalanche)\b|\b(snow\s*(retention|fence))\b.*\b(2|two)\s*[- ]?\s*pipe\b)\b/i,
+    securing: "snow-retention/2-pipe-snow-fence",
+    storageFolder: "solutions/snow-retention/2-pipe-snow-fence",
+    anchorType: "2000",
+    keywords: ["two-pipe", "snow fence", "pipe", "splices"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
     summary:
-      "2 pipe snow fence systems are supported by a continuous rooftop attachment approach that stabilizes the fence while distributing forces evenly across the roof. At Anchor, these systems typically use 2000-series anchors with piping and splices to create a consistent, non-penetrating support structure that integrates with the roof membrane for long-term watertight performance.",
+      "2-pipe snow fence systems are typically supported using 2000-series anchors with piping/splices to create a continuous rooftop attachment approach.",
+  },
+  {
+    key: "unitized-snow-fence",
+    match: /\b(unitized|unitised)\b.*\b(snow\s*(retention|fence)|snow\s*guard|avalanche)\b|\b(snow\s*(retention|fence))\b.*\b(unitized|unitised)\b/i,
+    securing: "snow-retention/unitized-snow-fence",
+    storageFolder: "solutions/snow-retention/unitized-snow-fence",
+    anchorType: "3000",
+    keywords: ["unitized", "snow fence"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
+    summary:
+      "Unitized snow fence systems are commonly supported using rigid framing with 3000-series anchors for new installations.",
+  },
+  {
+    key: "snow-retention-general",
+    match: /\b(snow\s*retention|snow\s*fence(?:s)?)\b/i,
+    securing: "snow-retention",
+    storageFolder: "solutions/snow-retention",
+    anchorType: "unknown",
+    keywords: ["snow retention", "snow fence", "unitized", "2-pipe", "two-pipe"],
+    ask: [
+      {
+        key: "variant",
+        question: "Is this a 2-pipe snow fence or a unitized snow fence?",
+        options: ["2-pipe", "Unitized", "Not sure"],
+        shouldAsk: (s) => !s.variant,
+      },
+      ASK_MEMBRANE,
+      ASK_WANTS,
+    ],
+    summary:
+      "Snow retention solutions vary by configuration (2-pipe vs unitized). The right docs depend on the fence type and roof conditions.",
   },
 
-  // -------------------------
-  // Snow Fence (generic / unitized)
-  // -------------------------
+  // ----------------------------
+  // Pipe frame (IMPORTANT ALIAS)
+  // ----------------------------
   {
-  key: "snow-fence-general",
-  match: /\b(snow\s*fence(?:s)?|snow\s*retention)\b/i,
-  summary:
-    "Snow fence systems are used to manage snow accumulation and shedding on rooftops by providing controlled retention. At Anchor, snow fence solutions vary by application, with unitized systems typically supported using 3000-series anchors and framing for new installations, while two-pipe snow fence systems commonly use 2000-series anchors with piping and splices. The appropriate approach depends on whether the system is unitized or pipe-based, as well as roof membrane compatibility."
-},
-
-{
-  key: "unitized-snow-fence",
-  match: /\b(unitized\s*snow\s*fence|unitized\s*fence)\b/i,
-  summary:
-    "Unitized snow fence systems are typically supported using rigid rooftop framing designed for new installations. At Anchor, unitized snow fences commonly use 3000-series anchors paired with structural framing to provide stable, long-term support while maintaining membrane compatibility and watertight integrity."
-},
-
-
-  // -------------------------
-  // Roof Mounted Box
-  // -------------------------
-  {
-    key: "roof-mounted-box",
-    match: /\b(roof\s*mounted\s*box(?:es)?|roof\s*box(?:es)?|rooftop\s*box(?:es)?|enclosure(?:s)?\s*(?:on\s*the\s*roof|rooftop))\b/i,
+    key: "pipe-frame-attached",
+    // ✅ attached pipe-frame is also called roof-mounted H-frame
+    match: /\b(attached\s*pipe[-\s]*frame|pipe[-\s]*frame\s*attached|roof[-\s]*mounted\s*h[-\s]*frame|roof\s*mounted\s*hframe|h[-\s]*frame)\b/i,
+    securing: "pipe-frame/attached",
+    storageFolder: "solutions/pipe-frame/attached",
+    anchorType: "3000",
+    keywords: ["pipe frame", "attached", "roof-mounted h-frame", "h-frame", "strut"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet", "cad_dwg", "cad_step", "product_drawing"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
     summary:
-      "Roof mounted boxes are typically supported using non-penetrating rooftop attachment points that secure the enclosure while preserving the roof membrane. At Anchor, these applications commonly use 2000-series anchors with strut framing to create a stable mounting platform, with anchors matched to the roof membrane for long-term watertight performance.",
+      "Attached pipe-frame securement (aka roof-mounted H-frame) typically uses rigid framing tied into membrane-compatible rooftop attachments for long-term stability.",
+  },
+  {
+    key: "pipe-frame-existing",
+    match: /\b(existing\s*pipe[-\s]*frame|pipe[-\s]*frame\s*existing|existing\s*h[-\s]*frame|retrofit\s*pipe[-\s]*frame)\b/i,
+    securing: "pipe-frame/existing",
+    storageFolder: "solutions/pipe-frame/existing",
+    anchorType: "guy-wire",
+    keywords: ["existing frame", "retrofit", "re-secure", "tie-down", "guy wire"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
+    summary:
+      "Existing pipe-frame securement is typically handled as a re-secure approach (often tie-down style) depending on what’s already installed.",
   },
 
-  // -------------------------
-  // Electrical Disconnect
-  // -------------------------
-  {
-    key: "electrical-disconnect",
-    match: /\b(electrical\s*disconnect(?:s)?|ac\s*disconnect(?:s)?|a\/c\s*disconnect(?:s)?|service\s*disconnect(?:s)?|disconnect\s*switch(?:es)?)\b/i,
-    summary:
-      "Electrical disconnects on the roof are typically supported using non-penetrating attachment solutions that keep equipment elevated, stable, and serviceable while protecting the roof system. At Anchor, these applications commonly use 2000-series anchors with strut framing, with anchors matched to the roof membrane to maintain watertight integrity.",
-  },
-
-  // -------------------------
-  // Wall Mounted Box
-  // -------------------------
-  {
-    key: "wall-mounted-box",
-    match: /\b(wall\s*mounted\s*box(?:es)?|wall\s*box(?:es)?|vertical\s*mounted\s*box(?:es)?|wall\s*enclosure(?:s)?)\b/i,
-    summary:
-      "Wall mounted boxes are typically supported using attachment solutions that create a stable mounting point at the roof-to-wall interface while maintaining membrane compatibility. At Anchor, these applications commonly use 3000-series anchors with strut framing to support the enclosure without compromising long-term roof performance.",
-  },
-
-  // -------------------------
-  // Roof Pipe Securement
-  // -------------------------
-  {
-    key: "roof-pipe-securement",
-    match: /\b(roof\s*pipe\s*securement|pipe\s*securement|rooftop\s*pip(?:e|ing)|piping\s*support(?:s)?|pipe\s*support(?:s)?)\b/i,
-    summary:
-      "Rooftop piping is typically supported using attachment solutions that distribute loads while allowing for movement and long-term exposure. At Anchor, roof pipe securement commonly uses 3000-series anchors to create membrane-integrated attachment points that support piping systems without introducing penetrations, with anchors matched to the roof membrane for watertight performance.",
-  },
-
-  // -------------------------
-  // Duct Securement
-  // -------------------------
+  // ----------------------------
+  // Duct securement (folder)
+  // ----------------------------
   {
     key: "duct-securement",
     match: /\b(duct\s*securement|ductwork\s*securement|duct\s*support(?:s)?|ductwork\s*support(?:s)?|rooftop\s*duct(?:s)?|ductwork)\b/i,
+    securing: "duct-securement",
+    storageFolder: "solutions/duct-securement",
+    anchorType: "3000",
+    keywords: ["duct", "ductwork", "support", "framing"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
     summary:
-      "Rooftop ductwork is typically supported using stable, non-penetrating attachment solutions that preserve the roof membrane while helping control movement over time. At Anchor, duct securement commonly uses membrane-compatible rooftop attachment points paired with framing components, keeping the system secure without turning the roof assembly into a weak point.",
+      "Rooftop ductwork is typically supported using stable, non-penetrating attachment solutions that preserve the roof membrane while controlling movement over time.",
   },
 
-  // -------------------------
-  // H-Frame (roof mounted)
-  // -------------------------
+  // ----------------------------
+  // Elevated stack (roof vs wall)
+  // ----------------------------
   {
-    key: "roof-mounted-h-frame",
-    match: /\b(roof\s*mounted\s*h[-\s]*frame(?:s)?|h[-\s]*frame(?:s)?|roof\s*h[-\s]*frame(?:s)?)\b/i,
+    key: "elevated-stack-roof",
+    match: /\b(roof\s*stack|roof[-\s]*mounted\s*stack|roof\s*exhaust\s*stack|exhaust\s*stack)\b/i,
+    securing: "elevated-stack/roof-stack",
+    storageFolder: "solutions/elevated-stack/roof-stack",
+    anchorType: "guy-wire",
+    keywords: ["stack", "exhaust", "tie-down", "guy wire"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
     summary:
-      "Roof mounted H-frames are typically supported using framing that spans between membrane-integrated attachment points to create balanced, long-term support for rooftop mechanical or piping systems. At Anchor, H-frame applications commonly use 3000-series anchors with strut framing, providing a rigid support structure while maintaining watertight roof performance.",
+      "Roof-mounted stacks are commonly stabilized using tie-down style securement (not rigid framing), depending on the application.",
   },
-
-  // -------------------------
-  // HVAC Tie Down (existing)
-  // -------------------------
   {
-    key: "hvac-tie-down",
-    match: /\b(hvac\s*tie[-\s]*down(?:s)?|rtu\s*tie[-\s]*down(?:s)?|tie[-\s]*down(?:s)?\s*(?:for\s*)?(?:hvac|rtu|rooftop\s*unit)|rooftop\s*unit(?:s)?|rtu(?:s)?)\b/i,
+    key: "elevated-stack-wall",
+    match: /\b(wall\s*stack|wall[-\s]*mounted\s*stack|parapet\s*stack)\b/i,
+    securing: "elevated-stack/wall-stack",
+    storageFolder: "solutions/elevated-stack/wall-stack",
+    anchorType: "2000",
+    keywords: ["wall", "parapet", "stack"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
     summary:
-      "Existing mechanical equipment is typically stabilized using tie-down solutions that reinforce the unit without requiring a full reframe. At Anchor, these applications commonly use a guy wire kit paired with 2000-series anchors, helping control movement while preserving the roof membrane and existing installation.",
+      "Wall/parapet stacks are typically supported using attachment solutions that stabilize the assembly while preserving roof performance.",
   },
-
-  // -------------------------
-  // Existing pipe/duct (tie-down style)
-  // -------------------------
+  
+  // ----------------------------
+  // Boxes (roof / wall)
+  // ----------------------------
   {
-    key: "existing-pipe-duct",
-    match: /\b(existing\s*(?:pipe|piping|duct|ductwork)\b|re[-\s]*secure(?:ment)?\s*(?:pipe|duct)|retrofit\s*(?:pipe|duct)|existing\s*frame\s*(?:pipe|duct)?)\b/i,
+    key: "roof-box",
+    match: /\b(roof\s*box|roof[-\s]*mounted\s*box|rooftop\s*box|roof\s*mounted\s*enclosure)\b/i,
+    securing: "roof-box",
+    storageFolder: "solutions/roof-box",
+    anchorType: "2000",
+    keywords: ["enclosure", "strut", "box"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet", "install_manual"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
     summary:
-      "Existing pipe and duct systems are typically stabilized using tie-down solutions rather than full replacement framing. At Anchor, these applications commonly use a guy wire kit paired with 2000-series anchors to help control movement while minimizing disruption to the roof and preserving membrane integrity.",
+      "Roof-mounted boxes are typically supported using non-penetrating rooftop attachment points and framing while maintaining membrane compatibility.",
   },
-
-  // -------------------------
-  // Roof mounted elevated stack / exhaust
-  // -------------------------
   {
-    key: "roof-mounted-elevated-stack",
-    match: /\b(roof[-\s]*mounted\s*(?:elevated\s*)?(?:stack|stacks)|elevated\s*(?:exhaust\s*)?stack(?:s)?|exhaust\s*stack(?:s)?|roof\s*exhaust(?:\s*stack)?(?:s)?)\b/i,
+    key: "wall-box",
+    match: /\b(wall\s*box|wall[-\s]*mounted\s*box|wall\s*mounted\s*enclosure|parapet\s*box)\b/i,
+    securing: "wall-box",
+    storageFolder: "solutions/wall-box",
+    anchorType: "3000",
+    keywords: ["wall", "parapet", "enclosure"],
+    recommendedDocKinds: ["sales_sheet", "data_sheet", "install_sheet"],
+    ask: [ASK_MEMBRANE, ASK_WANTS],
     summary:
-      "Roof mounted elevated stacks are typically stabilized using tie-down solutions rather than rigid framing. At Anchor, these systems commonly use a guy wire kit paired with 2000-series anchors, helping keep the stack secure while minimizing roof disruption and maintaining membrane integrity.",
+      "Wall/parapet-mounted boxes are typically supported using attachment solutions that stabilize the enclosure at the roof-to-wall interface.",
   },
 
-  // -------------------------
-  // Wall mounted elevated stack
-  // -------------------------
-  {
-    key: "wall-mounted-elevated-stack",
-    match: /\b(wall[-\s]*mounted\s*(?:elevated\s*)?(?:stack|stacks)|vertical\s*(?:exhaust\s*)?stack(?:s)?\s*(?:at|on)\s*(?:wall|parapet)|stack(?:s)?\s*(?:on|at)\s*(?:parapet|wall))\b/i,
-    summary:
-      "Wall mounted elevated stacks are typically supported using attachment solutions that create a stable transition at the roof-to-wall interface while preserving the roof system. At Anchor, these applications commonly use 2000-series anchors with strut framing to provide stable support while maintaining watertight performance.",
-  },
-
-  // -------------------------
-  // Lightning Protection
-  // -------------------------
-  {
-    key: "lightning-protection",
-    match: /\b(lightning\s*protection|lightning\s*system(?:s)?|lightning\s*conductors?|air\s*terminal(?:s)?|lightning\s*cable(?:s)?)\b/i,
-    summary:
-      "Lightning protection components are typically supported using membrane-compatible rooftop attachment points that secure conductors without penetrating the roof. At Anchor, lightning protection applications commonly use 2000-series anchors, providing stable, watertight attachment that integrates cleanly with the roof system over time.",
-  },
-
-  // -------------------------
-  // Antenna (tie-down)
-  // -------------------------
-  {
-    key: "antenna",
-    match: /\b(antenna(?:s)?|radio\s*antenna(?:s)?|cell\s*antenna(?:s)?|communications\s*antenna(?:s)?)\b/i,
-    summary:
-      "Antennas are commonly stabilized using tie-down systems that help control movement and vibration over time. At Anchor, antenna installations typically use a guy wire kit paired with 2000-series anchors, creating membrane-matched attachment points that maintain watertight roof performance.",
-  },
-
-  // -------------------------
-  // Satellite Dish
-  // -------------------------
-  {
-    key: "satellite-dish",
-    match: /\b(satellite\s*dish(?:es)?|sat\s*dish(?:es)?|satellite\s*antenna(?:s)?|dish\s*mount(?:s)?)\b/i,
-    summary:
-      "Satellite dishes are typically supported using rooftop attachment solutions that stabilize the dish without penetrating the roof membrane. At Anchor, satellite dish applications commonly use 2000-series anchors to provide a secure, membrane-matched mounting approach that preserves watertight integrity over time.",
-  },
-
-  // -------------------------
-  // Weather Stations (tie-down)
-  // -------------------------
-  {
-    key: "weather-stations",
-    match: /\b(weather\s*station(?:s)?|meteorological\s*station(?:s)?|anemometer(?:s)?|wind\s*sensor(?:s)?|roof\s*weather)\b/i,
-    summary:
-      "Weather stations are typically stabilized using tie-down solutions that resist movement while minimizing impact to the roof system. At Anchor, these applications commonly use a guy wire kit paired with 2000-series anchors, providing stable, membrane-matched attachment points for long-term monitoring installations.",
-  },
-
-  // -------------------------
-  // Guy Wire Kit
-  // -------------------------
-  {
-    key: "guy-wire-kit",
-    match: /\b(guy\s*wire(?:s)?|guywire(?:s)?|guy\s*wire\s*kit(?:s)?|tie[-\s]*down\s*kit(?:s)?|wire\s*tie[-\s]*down)\b/i,
-    summary:
-      "Guy wire kits are used in tie-down applications where stabilization is needed without rigid framing. At Anchor, guy wire kits are paired with 2000-series anchors and include wire, brackets, tensioning hardware, and clips to help stabilize existing equipment and rooftop systems while preserving roof integrity.",
-  },
-
-  // -------------------------
-  // Equipment Screen
-  // -------------------------
-  {
-    key: "equipment-screen",
-    match: /\b(equipment\s*screens?|mechanical\s*screens?|mech(?:anical)?\s*screens?|screen\s*walls?)\b/i,
-    summary:
-      "Equipment screens are typically supported using a non-penetrating rooftop framing system that distributes loads across the roof while maintaining membrane integrity. At Anchor, equipment screens are commonly secured using 2000-series anchors paired with strut framing, stabilizing the screen against movement without creating roof penetrations. This approach is often shared with signage applications, with anchors matched to the roof membrane for long-term watertight performance.",
-  },
-
-  // -------------------------
-  // Signage
-  // -------------------------
-  {
-    key: "signage",
-    match: /\b(signage|roof\s*sign(?:s)?|building\s*sign(?:s)?|sign\s*frame(?:s)?|sign\s*support(?:s)?|sign\s*mount(?:s)?)\b/i,
-    summary:
-      "Signage systems are typically supported using non-penetrating rooftop attachment solutions that stabilize the sign while distributing forces across the roof. At Anchor, signage applications commonly use 2000-series anchors in a configuration similar to equipment screen installations, with anchors matched to the roof membrane for watertight performance.",
-  },
-
-  // -------------------------
-  // Light Mount
-  // -------------------------
-  {
-    key: "light-mount",
-    match: /\b(light\s*mount(?:s)?|light\s*pole(?:s)?|lighting\s*mount(?:s)?|flood\s*light(?:s)?|area\s*light(?:s)?)\b/i,
-    summary:
-      "Light mounts are typically supported using rooftop attachment solutions designed for rigid, long-term stability. At Anchor, these applications commonly use 3000-series anchors to create membrane-integrated attachment points that support elevated fixtures while maintaining watertight roof performance.",
-  },
-
-  // -------------------------
-  // Camera Mount
-  // -------------------------
-  {
-    key: "camera-mount",
-    match: /\b(camera\s*mount(?:s)?|camera(?:s)?|cctv|security\s*camera(?:s)?|surveillance\s*camera(?:s)?)\b/i,
-    summary:
-      "Camera mounts are typically supported using rooftop attachment solutions designed for long-term stability and minimal roof impact. At Anchor, these applications commonly use 3000-series anchors, creating membrane-matched attachment points that maintain watertight integrity over time.",
-  },
-
-  // -------------------------
-  // Roof Mounted Guardrail
-  // -------------------------
-  {
-    key: "roof-mounted-guardrail",
-    match: /\b(roof\s*mounted\s*guardrail(?:s)?|rooftop\s*guardrail(?:s)?|guardrail(?:s)?\s*(?:on|for)\s*roof)\b/i,
-    summary:
-      "Roof mounted guardrails are typically supported using membrane-integrated attachment points designed for long-term rooftop safety applications. At Anchor, these systems commonly use 3000-series anchors, creating a stable, watertight connection that supports rooftop access and maintenance needs.",
-  },
-
-  // -------------------------
-  // Wall Mounted Guardrail
-  // -------------------------
-  {
-    key: "wall-mounted-guardrail",
-    match: /\b(wall\s*mounted\s*guardrail(?:s)?|guardrail(?:s)?\s*(?:on|for)\s*wall|parapet\s*guardrail(?:s)?)\b/i,
-    summary:
-      "Wall mounted guardrails are typically supported using attachment solutions that transfer loads into the wall structure while maintaining roof-to-wall compatibility. At Anchor, these systems commonly use 3000-series anchors to provide stable, long-term rooftop safety support while preserving roof performance.",
-  },
-
-  // -------------------------
-  // Roof Ladder
-  // -------------------------
-  {
-    key: "roof-ladder",
-    match: /\b(roof\s*ladder(?:s)?|ladder\s*support(?:s)?|ladder\s*mount(?:s)?|ladder\s*bracket(?:s)?)\b/i,
-    summary:
-      "Roof ladders are typically supported using non-penetrating rooftop attachment solutions that secure the ladder while protecting the roof membrane. At Anchor, roof ladder applications commonly use 3000-series anchors paired with adjustable support components to provide stable access while maintaining watertight integrity.",
-  },
-
-  // -------------------------
-  // Roof Mounted Box vs Electrical Disconnect often overlap, but keep both
-  // -------------------------
-
-  // -------------------------
-  // Roof Mounted H-Frame already included above
-  // -------------------------
-
-  // -------------------------
-  // Duct Securement already included above
-  // -------------------------
-
-  // -------------------------
-  // “Exhaust System” (generic phrasing)
-  // -------------------------
-  {
-    key: "exhaust-system",
-    match: /\b(exhaust\s*system(?:s)?|exhaust\s*fan(?:s)?|ventilation\s*exhaust|roof\s*exhaust(?:s)?|vent\s*stack(?:s)?)\b/i,
-    summary:
-      "Rooftop exhaust systems are typically supported using membrane-compatible attachment solutions that stabilize equipment while preserving roof integrity. At Anchor, exhaust-related applications are commonly handled using membrane-matched rooftop attachment points paired with appropriate support components, keeping the system secure while maintaining watertight performance over time.",
-  },
-
-  // -------------------------
-  // Roof Mounted Box / Wall Mounted Box covered above
-  // -------------------------
+  // Keep adding the rest of your solutions the same way:
+  // - securing aligns to storage folder routes
+  // - include storageFolder
+  // - include aliases in match/keywords when the sales language differs from the folder name
 ];
+
+/* ---------------------------------------------
+   Resolver
+--------------------------------------------- */
+
+import type { CanonicalSolution as _CanonicalSolution } from "./canonicalSolutions";
+
+export function resolveCanonicalSolution(text: string): _CanonicalSolution | null {
+  const t = (text || "").trim().toLowerCase();
+  if (!t) return null;
+
+  for (const s of CANONICAL_SOLUTIONS) {
+    // defensive reset in case regex gets a global flag later
+    s.match.lastIndex = 0;
+    if (s.match.test(t)) return s;
+  }
+
+  return null;
+}

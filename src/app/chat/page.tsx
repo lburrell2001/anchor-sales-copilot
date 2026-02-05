@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 import ChatSidebar from "@/app/components/ChatSidebar";
@@ -28,16 +28,15 @@ type SourceUsed = {
 type ChatResponse = {
   conversationId?: string;
   sessionId?: string;
-  answer?: string; // can be empty for docs-only pulls
+  answer?: string;
   foldersUsed?: string[];
   recommendedDocs?: RecommendedDoc[];
   sourcesUsed?: SourceUsed[];
-  hasMoreDocs?: boolean; // optional (if your /api/chat returns it)
   error?: string;
 };
 
 type MsgMeta = {
-  type?: "docs_only" | "assistant_with_docs";
+  type?: "assistant_with_docs";
   recommendedDocs?: RecommendedDoc[];
   foldersUsed?: string[];
 };
@@ -58,12 +57,21 @@ type ConversationRow = {
   deleted_at?: string | null;
 };
 
-type MessageRow = {
-  role: "user" | "assistant";
-  content: string;
-  created_at: string;
-  meta?: MsgMeta | null;
-};
+function renderMessageContent(content: string) {
+  const parts = String(content || "").split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= 1) {
+    return <div className="text-black whitespace-pre-line">{content}</div>;
+  }
+  return (
+    <div className="space-y-2">
+      {parts.map((p, i) => (
+        <div key={i} className="text-black whitespace-pre-line">
+          {p}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const QUICK_PICKS: string[] = [
   "U2400 EPDM",
@@ -80,12 +88,6 @@ const DEFAULT_GREETING: Msg = {
     "Anchor Sales Co-Pilot ready.\nTell me what you’re mounting and what roof/membrane you’re working with (ex: U2400 EPDM), and I’ll pull the right docs.",
 };
 
-function formatWhen(iso?: string | null) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
 function titleOrNew(title?: string | null) {
   const t = (title || "").trim();
   return t.length ? t : "New chat";
@@ -100,6 +102,42 @@ async function readJsonSafely<T = any>(res: Response): Promise<T | null> {
   } catch {
     throw new Error(`Non-JSON response (${res.status}): ${text.slice(0, 200)}`);
   }
+}
+
+function SheetsInline({
+  docs,
+  onOpen,
+}: {
+  docs: RecommendedDoc[];
+  onOpen: (path: string) => void;
+}) {
+  if (!Array.isArray(docs) || docs.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-xl border border-black/10 bg-[#F6F7F8] p-3">
+      <div className="text-[12px] font-semibold text-black/70">
+        Recommended sheets
+      </div>
+
+      <div className="mt-2 space-y-2">
+        {docs.map((d, i) => (
+          <button
+            key={`${d.path}-${i}`}
+            type="button"
+            onClick={() => onOpen(d.path)}
+            className="w-full text-left rounded-lg border border-black/10 bg-white px-3 py-2 hover:bg-black/[0.03] transition"
+          >
+            <div className="text-sm font-semibold text-black">{d.title}</div>
+            <div className="text-[11px] text-[#76777B]">{d.doc_type}</div>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-2 text-[11px] text-[#76777B]">
+        Need more? Use <span className="font-semibold text-black/70">Asset Management</span> for the full library.
+      </div>
+    </div>
+  );
 }
 
 export default function ChatPage() {
@@ -135,34 +173,13 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Msg[]>([DEFAULT_GREETING]);
   const [loading, setLoading] = useState(false);
 
-  // ✅ show "See docs" only on user messages that actually yielded docs
-  const [docsReadyFor, setDocsReadyFor] = useState<Record<number, boolean>>({});
-
   // feedback (opt-in)
   const [showFeedback, setShowFeedback] = useState(false);
 
-  // right panel
-  const [lastDocs, setLastDocs] = useState<RecommendedDoc[]>([]);
-  type RecentDoc = {
-    doc_title: string | null;
-    doc_type: string | null;
-    doc_path: string;
-    doc_url: string | null;
-    created_at: string;
-  };
-
-  const [recentDocs, setRecentDocs] = useState<RecentDoc[]>([]);
-  const [lastFolders, setLastFolders] = useState<string[]>([]);
+  // sources for feedback component
   const [lastSources, setLastSources] = useState<SourceUsed[]>([]);
 
-  // docs paging (infinite scroll)
-  const [docsPage, setDocsPage] = useState(0);
-  const [docsHasMore, setDocsHasMore] = useState(false);
-  const [docsLoadingMore, setDocsLoadingMore] = useState(false);
-  const [lastDocsQuery, setLastDocsQuery] = useState<string | null>(null);
-
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const docsScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -188,77 +205,19 @@ export default function ChatPage() {
   }, [lastAssistantMessage]);
 
   const canShowFeedback = useMemo(() => {
-    // Only show "Was that correct?" after a real assistant answer (not the greeting)
     if (!lastAssistantMessage) return false;
     if (isDefaultGreeting) return false;
     return true;
   }, [isDefaultGreeting, lastAssistantMessage]);
 
   async function openDoc(path: string) {
-  const res = await fetch(`/api/doc-open?path=${encodeURIComponent(path)}`, {
-    method: "GET",
-    cache: "no-store",
-  });
+  if (!path) return;
 
-  if (res.status === 401) {
-    router.replace("/");
-    router.refresh();
-    return;
-  }
-
-  const data = await readJsonSafely<{ url?: string }>(res);
-  if (res.ok && data?.url) window.open(data.url, "_blank", "noopener,noreferrer");
+  // ✅ Let the browser handle redirects + file rendering
+  const url = `/api/doc-open?path=${encodeURIComponent(path)}`;
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
-  // ✅ Docs-only pull for a specific user message index
-  async function seeDocsFor(idx: number, text: string) {
-    if (!text) return;
-    if (!conversationId) return;
-
-    // reset docs paging for this query
-    setDocsPage(0);
-    setDocsHasMore(false);
-    setDocsLoadingMore(false);
-    setLastDocsQuery(text);
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "docs",
-          message: text,
-          userType,
-          conversationId,
-          sessionId,
-        }),
-      });
-
-      const data = await readJsonSafely<ChatResponse>(res);
-      if (!res.ok) return;
-
-      const docs = Array.isArray(data?.recommendedDocs) ? data.recommendedDocs : [];
-      const folders = Array.isArray(data?.foldersUsed) ? data.foldersUsed : [];
-
-      setLastDocs(docs);
-      setLastFolders(folders);
-
-      // ✅ only mark this bubble if docs actually came back
-      if (docs.length > 0) {
-        setDocsReadyFor((prev) => ({ ...prev, [idx]: true }));
-      }
-
-      // use server signal if present, else fallback
-      if (typeof data?.hasMoreDocs === "boolean") setDocsHasMore(data.hasMoreDocs);
-      else setDocsHasMore(docs.length > 0);
-
-      requestAnimationFrame(() => {
-        docsScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-      });
-    } catch {
-      // ignore – docs are optional
-    }
-  }
 
   const loadConversationMessages = useCallback(
     async (uid: string, cid: string) => {
@@ -275,75 +234,26 @@ export default function ChatPage() {
         if (msgErr) console.error("MESSAGES_LOAD_ERROR:", msgErr);
 
         if (rows && rows.length > 0) {
-          // Build display messages (skip empty assistant bubbles),
-          // but keep docs meta by attaching it to the previous user message.
-          const display: Array<{ role: "user" | "assistant"; content: string; meta?: any }> = [];
-          const nextDocsReady: Record<number, boolean> = {};
-
-          let lastUserDisplayIndex: number | null = null;
+          const display: Msg[] = [];
 
           for (const r of rows as any[]) {
             const role = r.role as "user" | "assistant";
             const content = (r.content ?? "").toString();
-            const meta = r.meta ?? null;
+            const meta = (r.meta ?? null) as MsgMeta | null;
 
-            // ✅ If this is a docs-only assistant row (empty content), don't render it
-            // but attach its meta to the previous user message.
-            if (role === "assistant" && !content.trim()) {
-              const docs = meta?.recommendedDocs;
-              const folders = meta?.foldersUsed;
+            // skip docs-only blank assistant rows (we don't have docs panel anymore)
+            if (role === "assistant" && !content.trim()) continue;
 
-              if (lastUserDisplayIndex !== null && Array.isArray(docs) && docs.length > 0) {
-                // attach docs meta to the last user bubble
-                display[lastUserDisplayIndex].meta = {
-                  ...(display[lastUserDisplayIndex].meta || {}),
-                  ...meta,
-                };
-
-                // mark that user bubble as having docs
-                nextDocsReady[lastUserDisplayIndex] = true;
-
-                // also restore right panel to last seen docs
-                setLastDocs(docs);
-                setLastFolders(Array.isArray(folders) ? folders : []);
-              }
-
-              continue; // skip rendering this blank assistant bubble
-            }
-
-            // Normal message bubble
-            const idx = display.length;
             display.push({ role, content, meta });
-
-            if (role === "user") lastUserDisplayIndex = idx;
-
-            // If an assistant answer has docs meta, mark the previous user bubble
-            if (role === "assistant") {
-              const docs = meta?.recommendedDocs;
-              if (lastUserDisplayIndex !== null && Array.isArray(docs) && docs.length > 0) {
-                nextDocsReady[lastUserDisplayIndex] = true;
-              }
-            }
           }
 
           setMessages(display as any);
-          setDocsReadyFor(nextDocsReady);
         } else {
           setMessages([DEFAULT_GREETING] as any);
-          setDocsReadyFor({});
         }
 
-        // clear per-response panels when switching history
         setLastSources([]);
-        setLastDocs([]);
-        setLastFolders([]);
         setShowFeedback(false);
-
-        // reset docs paging
-        setDocsPage(0);
-        setDocsHasMore(false);
-        setDocsLoadingMore(false);
-        setLastDocsQuery(null);
       } finally {
         setHistoryLoading(false);
       }
@@ -389,40 +299,6 @@ export default function ChatPage() {
     [supabase]
   );
 
-  const switchConversation = useCallback(
-    async (cid: string) => {
-      if (!userId) return;
-
-      if (cid === conversationId) {
-        setSidebarOpen(false);
-        return;
-      }
-
-      setConversationId(cid);
-
-      // reset per-conversation UI
-      setLastDocs([]);
-      setLastFolders([]);
-      setLastSources([]);
-      setSessionId(null);
-      setInput("");
-      setSidebarOpen(false);
-      setShowFeedback(false);
-
-      // ✅ reset "See docs" state
-      setDocsReadyFor({});
-
-      // reset docs paging
-      setDocsPage(0);
-      setDocsHasMore(false);
-      setDocsLoadingMore(false);
-      setLastDocsQuery(null);
-
-      await loadConversationMessages(userId, cid);
-    },
-    [conversationId, loadConversationMessages, userId]
-  );
-
   const renameConversation = useCallback(
     async (cid: string, title: string) => {
       if (!userId) return;
@@ -444,6 +320,29 @@ export default function ChatPage() {
       await loadConversations(userId);
     },
     [supabase, userId, loadConversations]
+  );
+
+  const switchConversation = useCallback(
+    async (cid: string) => {
+      if (!userId) return;
+
+      if (cid === conversationId) {
+        setSidebarOpen(false);
+        return;
+      }
+
+      setConversationId(cid);
+
+      // reset per-conversation UI
+      setLastSources([]);
+      setSessionId(null);
+      setInput("");
+      setSidebarOpen(false);
+      setShowFeedback(false);
+
+      await loadConversationMessages(userId, cid);
+    },
+    [conversationId, loadConversationMessages, userId]
   );
 
   const deleteConversation = useCallback(
@@ -471,22 +370,10 @@ export default function ChatPage() {
       if (cid === conversationId) {
         const nextId = list?.[0]?.id ?? null;
 
-        // reset UI
-        setLastDocs([]);
-        setLastFolders([]);
         setLastSources([]);
         setSessionId(null);
         setInput("");
         setShowFeedback(false);
-
-        // ✅ reset "See docs" state
-        setDocsReadyFor({});
-
-        // reset docs paging
-        setDocsPage(0);
-        setDocsHasMore(false);
-        setDocsLoadingMore(false);
-        setLastDocsQuery(null);
 
         if (nextId) {
           setConversationId(nextId);
@@ -598,47 +485,14 @@ export default function ChatPage() {
     };
   }, [createConversation, loadConversationMessages, loadConversations, router, supabase]);
 
-  useEffect(() => {
-    if (!userId) return;
-
-    (async () => {
-      try {
-        const res = await fetch("/api/recent-docs", { method: "GET", cache: "no-store" });
-        const data = await readJsonSafely<any>(res);
-        if (!res.ok) return;
-        setRecentDocs(Array.isArray(data?.docs) ? data.docs : []);
-      } catch {
-        // ignore
-      }
-    })();
-  }, [userId]);
-
-function returnToDesktop() {
-  // Persist preference for ~30 days
-  document.cookie = `force_desktop=1; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
-  window.location.reload();
-}
-
   async function newChat() {
     if (!userId) return;
 
-    // reset UI
     setMessages([DEFAULT_GREETING]);
-    setLastDocs([]);
-    setLastFolders([]);
     setLastSources([]);
     setSessionId(null);
     setInput("");
     setShowFeedback(false);
-
-    // ✅ reset "See docs" state
-    setDocsReadyFor({});
-
-    // reset docs paging
-    setDocsPage(0);
-    setDocsHasMore(false);
-    setDocsLoadingMore(false);
-    setLastDocsQuery(null);
 
     const created = await createConversation(userId);
     if (!created?.id) return;
@@ -662,8 +516,6 @@ function returnToDesktop() {
   const ready = !profileLoading && !historyLoading && !!userId && !!conversationId;
   const inputDisabled = !ready;
 
-  const hasDocs = lastDocs.length > 0;
-
   const roleLabel = useMemo(() => {
     if (role === "anchor_rep") return "Anchor Rep";
     if (role === "external_rep") return "External Rep";
@@ -671,145 +523,103 @@ function returnToDesktop() {
     return "no role";
   }, [role]);
 
-  // infinite load for docs panel
-  async function loadMoreDocs() {
-    if (docsLoadingMore) return;
-    if (!docsHasMore) return;
-    if (!lastDocsQuery) return;
+async function send() {
+  const text = input.trim();
+  if (!text || loading) return;
+  if (!userId || !conversationId) return;
+  if (profileLoading || historyLoading) return;
 
-    setDocsLoadingMore(true);
-    try {
-      const nextPage = docsPage + 1;
+  setShowFeedback(false);
 
-      const res = await fetch(
-        `/api/docs?q=${encodeURIComponent(lastDocsQuery)}&limit=20&page=${nextPage}`,
-        { method: "GET", cache: "no-store" }
-      );
+  // optimistic UI append
+  const nextMessages: Msg[] = [...messages, { role: "user", content: text }];
+  setMessages(nextMessages);
+  setInput("");
+  setLoading(true);
+  setLastSources([]);
 
-      const data = await readJsonSafely<any>(res);
-      if (!res.ok) return;
+  try {
+    // ✅ Send ChatGPT-style thread (strip meta)
+    const thread = nextMessages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
 
-      const nextDocs: RecommendedDoc[] = Array.isArray(data?.docs) ? data.docs : [];
-      const hasMore = !!data?.hasMore;
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: thread,          // ✅ key change
+        userType,
+        conversationId,
+        sessionId,
+      }),
+    });
 
-      setLastDocs((prev) => {
-        const seen = new Set(prev.map((d) => d.path));
-        const merged = [...prev];
-        for (const d of nextDocs) {
-          if (d?.path && !seen.has(d.path)) merged.push(d);
-        }
-        return merged;
-      });
-
-      setDocsPage(nextPage);
-      setDocsHasMore(hasMore);
-    } finally {
-      setDocsLoadingMore(false);
+    if (res.status === 401) {
+      router.replace("/");
+      router.refresh();
+      return;
     }
-  }
 
-  async function send() {
-    const text = input.trim();
-    if (!text || loading) return;
-    if (!userId || !conversationId) return;
-    if (profileLoading || historyLoading) return;
+    const data = await readJsonSafely<ChatResponse>(res);
 
-    // UX: hide feedback whenever a new message is sent
-    setShowFeedback(false);
-
-    // ✅ capture the index this user message will occupy
-    const userMsgIndex = messages.length;
-
-    setMessages((m) => [...m, { role: "user", content: text }]);
-    setInput("");
-    setLoading(true);
-    setLastSources([]);
-
-    // reset docs paging for a new query
-    setDocsPage(0);
-    setDocsHasMore(false);
-    setDocsLoadingMore(false);
-    setLastDocsQuery(text);
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          userType,
-          conversationId,
-          sessionId,
-        }),
-      });
-
-      if (res.status === 401) {
-        router.replace("/");
-        router.refresh();
-        return;
-      }
-
-      const data = await readJsonSafely<ChatResponse>(res);
-
-      if (!res.ok) {
-        const msg = (data?.error ?? `HTTP ${res.status}`).toString();
-        setMessages((m) => [...m, { role: "assistant", content: `I hit an error.\n\n${msg}` }]);
-        return;
-      }
-
-      const docs = Array.isArray(data?.recommendedDocs) ? data!.recommendedDocs! : [];
-      const folders = Array.isArray(data?.foldersUsed) ? data!.foldersUsed! : [];
-      const sources = Array.isArray(data?.sourcesUsed) ? data!.sourcesUsed! : [];
-
-      setLastDocs(docs);
-      setLastFolders(folders);
-      setLastSources(sources);
-
-      // ✅ only show the "See docs" button if this message actually returned docs
-      if (docs.length > 0) {
-        setDocsReadyFor((prev) => ({ ...prev, [userMsgIndex]: true }));
-      }
-
-      // Better: use server signal if available
-      if (typeof data?.hasMoreDocs === "boolean") {
-        setDocsHasMore(data.hasMoreDocs);
-      } else {
-        // fallback: assume more if we got any docs (loadMoreDocs will correct once /api/docs returns hasMore)
-        setDocsHasMore(docs.length > 0);
-      }
-
-      // snap docs panel to top on new results
-      requestAnimationFrame(() => {
-        docsScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-      });
-
-      if (data?.sessionId) setSessionId(data.sessionId);
-
-      // Only append assistant message if present
-      const answerText = (data?.answer ?? "").toString().trim();
-      if (answerText) {
-        setMessages((m) => [...m, { role: "assistant", content: answerText }]);
-      }
-
-      // auto-title
-      const current = conversations.find((c) => c.id === conversationId);
-      const currentTitle = (current?.title || "").trim();
-      if (!currentTitle || currentTitle.toLowerCase() === "new chat") {
-        const nextTitle = text.slice(0, 48).trim() || "New chat";
-        renameConversation(conversationId, nextTitle);
-      }
-
-      if (data?.conversationId && data.conversationId !== conversationId) {
-        setConversationId(data.conversationId);
-      }
-
-      await loadConversations(userId);
-    } catch (e: any) {
-      setMessages((m) => [...m, { role: "assistant", content: `Network error: ${e?.message || String(e)}` }]);
-    } finally {
-      setLoading(false);
+    if (!res.ok) {
+      const msg = (data?.error ?? `HTTP ${res.status}`).toString();
+      setMessages((m) => [...m, { role: "assistant", content: `I hit an error.\n\n${msg}` }]);
+      return;
     }
+
+    const docs = Array.isArray(data?.recommendedDocs) ? data!.recommendedDocs! : [];
+    const folders = Array.isArray(data?.foldersUsed) ? data!.foldersUsed! : [];
+    const sources = Array.isArray(data?.sourcesUsed) ? data!.sourcesUsed! : [];
+
+    setLastSources(sources);
+    if (data?.sessionId) setSessionId(data.sessionId);
+
+    const answerText = (data?.answer ?? "").toString().trim();
+    const meta: MsgMeta | null =
+      docs.length > 0 ? { type: "assistant_with_docs", recommendedDocs: docs, foldersUsed: folders } : null;
+
+    if (answerText) {
+  setMessages((m) => [...m, { role: "assistant", content: answerText, meta }]);
+} else if (docs.length > 0) {
+  setMessages((m) => [...m, { role: "assistant", content: "Recommended sheets:", meta }]);
+} else {
+  // ✅ NEW: never allow “no assistant bubble”
+  setMessages((m) => [
+    ...m,
+    {
+      role: "assistant",
+      content:
+        "I didn’t get a response back from the assistant. Try again — and if it keeps happening, tell me what you’re securing + membrane type so I can pull the right folder.",
+    },
+  ]);
+}
+
+
+    // auto-title
+    const current = conversations.find((c) => c.id === conversationId);
+    const currentTitle = (current?.title || "").trim();
+    if (!currentTitle || currentTitle.toLowerCase() === "new chat") {
+      const nextTitle = text.slice(0, 48).trim() || "New chat";
+      renameConversation(conversationId, nextTitle);
+    }
+
+    if (data?.conversationId && data.conversationId !== conversationId) {
+      setConversationId(data.conversationId);
+    }
+
+    await loadConversations(userId);
+  } catch (e: any) {
+    setMessages((m) => [
+      ...m,
+      { role: "assistant", content: `Network error: ${e?.message || String(e)}` },
+    ]);
+  } finally {
+    setLoading(false);
   }
+}
 
   // Shared UI tokens (Anchor dashboard scheme)
   const PANEL = "rounded-3xl border border-black/10 bg-white shadow-sm";
@@ -817,96 +627,85 @@ function returnToDesktop() {
   const PANEL_BODY = "flex-1 min-h-0";
   const SOFT_SCROLL = "overflow-y-auto [scrollbar-width:thin]";
 
-  // Common colors
   const MUTED = "text-[#76777B]";
-  const GREEN = "text-[#047835]";
 
   return (
     <main className="min-h-[100svh] bg-[#F6F7F8] text-black flex flex-col">
       {/* Top bar */}
       <header className="sticky top-0 z-30 bg-[#047835] pt-[env(safe-area-inset-top)]">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
+          {/* Left: brand + menu */}
+          <div className="flex min-w-0 items-center gap-3">
+            {/* Mobile menu */}
+            <button
+              type="button"
+              onClick={() => setSidebarOpen((v) => !v)}
+              className="md:hidden h-9 rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
+              aria-label="Open chat menu"
+            >
+              Menu
+            </button>
 
-  <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
-    {/* Left: brand + menu */}
-    <div className="flex min-w-0 items-center gap-3">
-      {/* Mobile menu */}
-      <button
-        type="button"
-        onClick={() => setSidebarOpen((v) => !v)}
-        className="md:hidden h-9 rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
-        aria-label="Open chat menu"
-      >
-        Menu
-      </button>
+            {/* Brand */}
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="h-9 w-9 shrink-0 rounded-md border border-white/20 bg-white/10 flex items-center justify-center hover:bg-white/15 transition"
+              title="Refresh"
+              aria-label="Refresh"
+            >
+              <img src="/anchorp.svg" alt="Anchor Products" className="h-10 w-auto" />
+            </button>
 
-      {/* Brand */}
-      <button
-        type="button"
-        onClick={() => window.location.reload()}
-        className="h-9 w-9 shrink-0 rounded-md border border-white/20 bg-white/10 flex items-center justify-center hover:bg-white/15 transition"
-        title="Refresh"
-        aria-label="Refresh"
-      >
-        <img src="/anchorp.svg" alt="Anchor Products" className="h-10 w-auto" />
-      </button>
+            <div className="min-w-0 leading-tight">
+              <div className="truncate text-sm font-semibold tracking-wide text-white">
+                Anchor Sales Co-Pilot
+              </div>
+              <div className="truncate text-[12px] text-white/80">Docs • Specs • Install • Downloads</div>
+            </div>
+          </div>
 
-      <div className="min-w-0 leading-tight">
-        <div className="truncate text-sm font-semibold tracking-wide text-white">
-          Anchor Sales Co-Pilot
+          {/* Right: actions */}
+          <div className="flex shrink-0 items-center gap-2">
+            {!profileLoading && role === "admin" ? (
+              <button
+                type="button"
+                onClick={goAdmin}
+                className="hidden sm:inline-flex h-9 items-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
+                title="Open admin dashboard"
+              >
+                Admin
+              </button>
+            ) : (
+              <div className="hidden sm:inline-flex rounded-md border border-white/20 bg-white/10 px-2 py-1 text-[11px] text-white/90">
+                {profileLoading ? "…" : roleLabel}
+              </div>
+            )}
+
+            <Link
+              href="/dashboard"
+              className="hidden md:inline-flex h-9 items-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
+              title="Return to Dashboard"
+            >
+              Dashboard
+            </Link>
+
+            <Link
+              href="/dashboard"
+              className="sm:hidden h-9 min-w-[96px] inline-flex items-center justify-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
+              title="Return to Dashboard"
+            >
+              Dashboard
+            </Link>
+          </div>
         </div>
-        <div className="truncate text-[12px] text-white/80">
-          Docs • Specs • Install • Downloads
-        </div>
-      </div>
-    </div>
-
-    {/* Right: actions */}
-    <div className="flex shrink-0 items-center gap-2">
-      {/* Role badge / Admin */}
-      {!profileLoading && role === "admin" ? (
-        <button
-          type="button"
-          onClick={goAdmin}
-          className="hidden sm:inline-flex h-9 items-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
-          title="Open admin dashboard"
-        >
-          Admin
-        </button>
-      ) : (
-        <div className="hidden sm:inline-flex rounded-md border border-white/20 bg-white/10 px-2 py-1 text-[11px] text-white/90">
-          {profileLoading ? "…" : roleLabel}
-        </div>
-      )}
-
-      {/* Return to Dashboard (desktop) */}
-<Link
-  href="/dashboard"
-  className="hidden md:inline-flex h-9 items-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
-  title="Return to Dashboard"
->
-  Dashboard
-</Link>
-
-{/* Mobile: Return to Dashboard (replaces Sign out) */}
-<Link
-  href="/dashboard"
-  className="sm:hidden h-9 min-w-[96px] inline-flex items-center justify-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
-  title="Return to Dashboard"
->
-  Dashboard
-</Link>
-
-    </div>
-  </div>
-</header>
-
+      </header>
 
       {/* Body */}
-      {/* Body */}
-<div className="flex-1">
-  <div className="mx-auto max-w-6xl px-4 py-4">
-    <div className="flex flex-col gap-4 md:grid md:h-[calc(100svh-64px)] md:grid-cols-[280px_1fr_320px]">
-
+      <div className="flex-1">
+        <div className="mx-auto max-w-6xl px-4 py-4">
+          {/* ✅ 2 columns now (sidebar + chat) */}
+          <div className="flex flex-col gap-4 md:grid md:h-[calc(100svh-64px)] md:grid-cols-[280px_1fr]">
             {/* Desktop sidebar */}
             <aside className={`hidden md:flex ${PANEL} flex-col min-h-0`}>
               <div className={`${PANEL_BODY} ${SOFT_SCROLL} bg-transparent`}>
@@ -927,49 +726,44 @@ function returnToDesktop() {
             </aside>
 
             {/* Mobile sidebar drawer */}
-{sidebarOpen && (
-  <div className="md:hidden fixed inset-0 z-40">
-    <div className="absolute inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
-
-    <aside className={`absolute left-3 right-3 top-16 bottom-3 ${PANEL} flex flex-col min-h-0`}>
-      <ChatSidebar
-        conversations={conversations.map((c) => ({
-          id: c.id,
-          title: c.title,
-          updated_at: c.updated_at || c.created_at || null,
-        }))}
-        activeId={conversationId}
-        loading={convoLoading}
-        onNewChat={() => {
-          newChat();
-          setSidebarOpen(false);
-        }}
-        onClose={() => setSidebarOpen(false)} // ✅ shows "Close" button in header
-        onSelect={(id) => {
-          switchConversation(id);
-          setSidebarOpen(false);
-        }}
-        onRename={renameConversation}
-        onDelete={deleteConversation}
-      />
-    </aside>
-  </div>
-)}
-
-
-
+            {sidebarOpen && (
+              <div className="md:hidden fixed inset-0 z-40">
+                <div className="absolute inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
+                <aside className={`absolute left-3 right-3 top-16 bottom-3 ${PANEL} flex flex-col min-h-0`}>
+                  <ChatSidebar
+                    conversations={conversations.map((c) => ({
+                      id: c.id,
+                      title: c.title,
+                      updated_at: c.updated_at || c.created_at || null,
+                    }))}
+                    activeId={conversationId}
+                    loading={convoLoading}
+                    onNewChat={() => {
+                      newChat();
+                      setSidebarOpen(false);
+                    }}
+                    onClose={() => setSidebarOpen(false)}
+                    onSelect={(id) => {
+                      switchConversation(id);
+                      setSidebarOpen(false);
+                    }}
+                    onRename={renameConversation}
+                    onDelete={deleteConversation}
+                  />
+                </aside>
+              </div>
+            )}
 
             {/* Chat panel */}
             <section
-  className={[
-    PANEL,
-    "flex flex-col",
-    "h-[calc(100svh-64px)] md:h-full", // header height
-    "min-h-0",
-    "shrink-0",
-  ].join(" ")}
->
-
+              className={[
+                PANEL,
+                "flex flex-col",
+                "h-[calc(100svh-64px)] md:h-full",
+                "min-h-0",
+                "shrink-0",
+              ].join(" ")}
+            >
               <div className={PANEL_HEADER}>
                 <div className={`text-xs ${MUTED}`}>
                   Ask like: “U2400 EPDM install manual + data sheet” or “HVAC solution docs”
@@ -989,20 +783,11 @@ function returnToDesktop() {
                           : "bg-white border border-black/10",
                       ].join(" ")}
                     >
-                      <div className="text-black">{m.content}</div>
+                      {renderMessageContent(m.content)}
 
-                      {/* ✅ User message actions */}
-                      {m.role === "user" && !!docsReadyFor[idx] && (
-                        <div className="mt-2 flex items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => seeDocsFor(idx, m.content)}
-                            className="rounded-md border border-black/10 bg-white px-2 py-1 text-[11px] text-black/70 hover:bg-black/[0.03] transition"
-                            title="Show documents for this message"
-                          >
-                            See docs
-                          </button>
-                        </div>
+                      {/* ✅ Inline recommended sheets inside assistant bubble */}
+                      {m.role === "assistant" && Array.isArray(m.meta?.recommendedDocs) && (
+                        <SheetsInline docs={m.meta!.recommendedDocs!} onOpen={openDoc} />
                       )}
                     </div>
                   ))}
@@ -1131,106 +916,6 @@ function returnToDesktop() {
                 </div>
               </div>
             </section>
-
-            {/* Docs panel */}
-            <aside
-  className={[
-    PANEL,
-    "flex flex-col h-auto md:h-full md:min-h-0",
-    hasDocs ? "block" : "hidden",
-    "md:flex md:block",
-  ].join(" ")}
->
-
-              <div className={PANEL_HEADER}>
-                <div className="text-sm font-semibold">Recommended documents</div>
-                <div className={`mt-1 text-[12px] ${MUTED}`}>Tap to download/share</div>
-              </div>
-
-              <div
-                ref={docsScrollRef}
-                className={`${PANEL_BODY} ${SOFT_SCROLL} p-3 bg-transparent`}
-                onScroll={(e) => {
-                  const el = e.currentTarget;
-                  const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 140;
-                  if (nearBottom) loadMoreDocs();
-                }}
-              >
-                {!hasDocs ? (
-                  <div className="rounded-xl border border-black/10 bg-white p-3 text-sm text-[#76777B]">
-                    No docs yet. Ask a question to pull files from Storage.
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    
-
-                    {/* Recommended docs */}
-                    <div className="space-y-2">
-                      {lastDocs.map((d, i) => (
-                        <button
-                          key={`${d.path}-${i}`}
-                          type="button"
-                          onClick={() => {
-                            if (!d.url) return;
-
-                            navigator.sendBeacon(
-                              "/api/doc-event",
-                              JSON.stringify({ conversationId, doc: d })
-                            );
-
-                            window.open(`/api/doc-open?path=${encodeURIComponent(d.path)}`, "_blank", "noopener,noreferrer");
-                          }}
-                          className={[
-                            "w-full text-left rounded-xl border px-3 py-2 transition",
-                            d.url
-                              ? "border-black/10 bg-white hover:border-[#047835]/40 hover:bg-black/[0.03]"
-                              : "border-black/10 bg-white opacity-60 cursor-not-allowed",
-                          ].join(" ")}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-semibold text-black">
-                                {d.title}
-                              </div>
-                              <div className="text-[11px] text-[#76777B]">
-                                {d.doc_type} • {d.path}
-                              </div>
-                            </div>
-
-                            <div className="shrink-0 rounded-md border border-black/10 bg-[#9CE2BB] px-2 py-1 text-[11px] font-semibold text-[#11500F]">
-                              Open
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-
-                    {(docsLoadingMore || docsHasMore) && (
-                      <div className="mt-1 rounded-xl border border-black/10 bg-white p-3 text-[12px] text-[#76777B]">
-                        {docsLoadingMore ? "Loading more…" : "Scroll for more…"}
-                      </div>
-                    )}
-
-                    {!docsHasMore && lastDocs.length > 0 && (
-                      <div className="text-[11px] text-[#76777B]">End of results.</div>
-                    )}
-
-                    {lastFolders?.length ? (
-                      <div className="rounded-xl border border-black/10 bg-white p-3">
-                        <div className="text-[11px] font-semibold text-black/70">Folders used</div>
-                        <div className="mt-1 space-y-1 text-[11px] text-[#76777B]">
-                          {lastFolders.map((f) => (
-                            <div key={f} className="break-words">
-                              {f}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            </aside>
           </div>
         </div>
       </div>
