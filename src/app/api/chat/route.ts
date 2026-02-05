@@ -84,9 +84,16 @@ function containsEngineeringOutput(answer: string) {
 }
 
 function needsEngineeringEscalation(text: string) {
-  return /\b(how many|spacing|layout|pattern|load|uplift|wind|seismic|psf|kpa|torque|fastener|code|ibc|asce|fm|ul)\b/i.test(
-    text
-  );
+  const t = String(text || "");
+  // Only escalate on explicit engineering asks or numeric/code-driven requests.
+  if (/\b(how many|spacing|layout|pattern|torque|fastener|code|ibc|asce|fm|ul)\b/i.test(t)) {
+    return true;
+  }
+  // For wind/uplift/load/seismic, require calculation intent or units.
+  if (/\b(wind|uplift|load|seismic)\b/i.test(t)) {
+    return /\b(calc|calculate|rating|psf|kpa|mph|pressure|design)\b/i.test(t);
+  }
+  return false;
 }
 
 function extractMembrane(text: string) {
