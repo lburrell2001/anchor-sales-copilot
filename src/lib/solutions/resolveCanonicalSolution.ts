@@ -153,6 +153,7 @@ function normalizeIntentText(input: string) {
   t = t.replace(/\bunitized\s*fence\b/g, "unitized snow fence");
   t = t.replace(/\bfence\s*panels\b/g, "unitized snow fence");
   t = t.replace(/\bsnow\s*guard(s)?\b/g, "snow retention");
+  t = t.replace(/\bsnow\b/g, "snow retention");
 
   // Existing / retrofit / tie-down language
   t = t.replace(/\bexisting\s*frame\b/g, "existing pipe frame");
