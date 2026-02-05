@@ -262,7 +262,7 @@ async function listPathsViaDocsTable(opts: {
 
   let query = supabaseAdmin
     .from("knowledge_docs")
-    .select("path", { count: "exact" })
+    .select("path,storage_path", { count: "exact" })
     .order("path", { ascending: true });
 
   if (visibility === "public") {
@@ -270,12 +270,13 @@ async function listPathsViaDocsTable(opts: {
   }
 
   if (prefix) {
-    query = query.ilike("path", `${normalizePathInput(prefix)}%`);
+    const p = normalizePathInput(prefix);
+    query = query.or(`path.ilike.${p}%,storage_path.ilike.${p}%`);
   }
 
   if (q) {
     const qNorm = String(q).trim();
-    if (qNorm) query = query.ilike("path", `%${qNorm}%`);
+    if (qNorm) query = query.or(`path.ilike.%${qNorm}%,storage_path.ilike.%${qNorm}%`);
   }
 
   const from = page * limit;
@@ -284,7 +285,9 @@ async function listPathsViaDocsTable(opts: {
   const { data, error, count } = await query.range(from, to);
   if (error) throw error;
 
-  const names = (data || []).map((r: any) => String(r?.path || "")).filter(Boolean);
+  const names = (data || [])
+    .map((r: any) => String(r?.path || r?.storage_path || ""))
+    .filter(Boolean);
   return { names, total: count ?? names.length };
 }
 
