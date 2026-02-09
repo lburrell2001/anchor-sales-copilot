@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { supabaseRoute } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
@@ -24,7 +24,7 @@ function clean(v: any) {
   return String(v || "").trim();
 }
 
-export async function POST(req: Request, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   try {
     const supabase = await supabaseRoute();
     const { data: auth, error: authErr } = await supabase.auth.getUser();
