@@ -351,21 +351,46 @@ export async function GET(req: Request) {
 
     const q = qRaw ? decodeURIComponent(qRaw).trim() : "";
 
-    const { names, total } =
-      visibility === "public"
-        ? await listPathsViaDocsTable({
-            prefix: folder || undefined,
-            q: q || undefined,
-            page,
-            limit,
-            visibility,
-          })
-        : await listPathsViaDb({
-            prefix: folder || undefined,
-            q: q || undefined,
-            page,
-            limit,
-          });
+    let names: string[] = [];
+    let total = 0;
+
+    if (visibility === "public") {
+      const fromTable = await listPathsViaDocsTable({
+        prefix: folder || undefined,
+        q: q || undefined,
+        page,
+        limit,
+        visibility,
+      });
+      names = fromTable.names;
+      total = fromTable.total;
+
+      // Fallback: if public table is empty in prod, allow folder-scoped listing for known public prefixes.
+      const allowFallback =
+        !q &&
+        folder &&
+        (folder.startsWith("solutions/") || folder.startsWith("anchor/u-anchors/"));
+
+      if (names.length === 0 && allowFallback) {
+        const fromStorage = await listPathsViaDb({
+          prefix: folder || undefined,
+          q: undefined,
+          page,
+          limit,
+        });
+        names = fromStorage.names;
+        total = fromStorage.total;
+      }
+    } else {
+      const fromStorage = await listPathsViaDb({
+        prefix: folder || undefined,
+        q: q || undefined,
+        page,
+        limit,
+      });
+      names = fromStorage.names;
+      total = fromStorage.total;
+    }
 
     const docs = await signUrlsForPaths(names, 60 * 30, withText, excerptLen);
 

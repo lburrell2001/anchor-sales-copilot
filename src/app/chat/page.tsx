@@ -72,19 +72,10 @@ function renderMessageContent(content: string) {
   );
 }
 
-const QUICK_PICKS: string[] = [
-  "U2400 EPDM",
-  "Metal deck",
-  "Concrete deck",
-  "Wind speed unknown",
-  "HVAC unit (RTU)",
-  "Satellite dish",
-];
-
 const DEFAULT_GREETING: Msg = {
   role: "assistant",
   content:
-    "Anchor Sales Co-Pilot ready.\nTell me what you’re mounting and what roof/membrane you’re working with (ex: U2400 EPDM), and I’ll pull the right docs.",
+    "Anchor Sales Co-Pilot ready.\nTell me what you’re mounting and your roof/membrane type (ex: U2400 EPDM), and I’ll recommend the right Anchor solution.",
 };
 
 function titleOrNew(title?: string | null) {
@@ -498,44 +489,6 @@ export default function ChatPage() {
     setMessages([DEFAULT_GREETING]);
   }
 
-  function pushQuickPick(label: string) {
-    setInput((prev) => {
-      const p = prev.trim();
-      if (!p) return label;
-      if (p.toLowerCase().includes(label.toLowerCase())) return prev;
-      return `${p} • ${label}`;
-    });
-  }
-
-  function extractMemoryFromMessages(msgs: Msg[]) {
-    const text = msgs.map((m) => m.content).join("\n").toLowerCase();
-    const mem: { membrane?: string; series?: string; surface?: string; condition?: string } = {};
-
-    if (/\btpo\b/.test(text)) mem.membrane = "TPO";
-    else if (/\bpvc\b/.test(text)) mem.membrane = "PVC";
-    else if (/\bepdm\b/.test(text)) mem.membrane = "EPDM";
-    else if (/\bkee\b/.test(text)) mem.membrane = "KEE";
-    else if (/\bapp\b/.test(text)) mem.membrane = "APP";
-    else if (/\bsbs[-\s]?torch\b/.test(text)) mem.membrane = "SBS-Torch";
-    else if (/\bsbs\b/.test(text)) mem.membrane = "SBS";
-
-    if (/\b2000[-\s]?series\b|\bseries\s*2000\b/.test(text)) mem.series = "2000-Series";
-    else if (/\b3000[-\s]?series\b|\bseries\s*3000\b/.test(text)) mem.series = "3000-Series";
-
-    if (/\bparapet|wall\b/.test(text)) mem.surface = "Wall/Parapet";
-    else if (/\broof|rooftop\b/.test(text)) mem.surface = "Roof";
-
-    if (/\b(existing|retrofit|re[-\s]?secure|re[-\s]?tie|tie[-\s]?down)\b/.test(text)) {
-      mem.condition = "Existing / Re-secure";
-    } else if (/\bnew install|new\b/.test(text)) {
-      mem.condition = "New Install";
-    }
-
-    return mem;
-  }
-
-  const memory = useMemo(() => extractMemoryFromMessages(messages), [messages]);
-
   const ready = !profileLoading && !historyLoading && !!userId && !!conversationId;
   const inputDisabled = !ready;
 
@@ -739,32 +692,8 @@ async function send() {
             >
               <div className={PANEL_HEADER}>
                 <div className={`text-xs ${MUTED}`}>
-                  Ask like: “U2400 EPDM install manual + data sheet” or “HVAC solution docs”
+                  Ask like: “U2400 EPDM” or “HVAC unit on TPO”
                 </div>
-                {(memory.membrane || memory.series || memory.surface || memory.condition) && (
-                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-black/70">
-                    {memory.membrane && (
-                      <span className="rounded-full border border-black/10 bg-white px-2 py-1">
-                        Membrane: {memory.membrane}
-                      </span>
-                    )}
-                    {memory.series && (
-                      <span className="rounded-full border border-black/10 bg-white px-2 py-1">
-                        Series: {memory.series}
-                      </span>
-                    )}
-                    {memory.surface && (
-                      <span className="rounded-full border border-black/10 bg-white px-2 py-1">
-                        Surface: {memory.surface}
-                      </span>
-                    )}
-                    {memory.condition && (
-                      <span className="rounded-full border border-black/10 bg-white px-2 py-1">
-                        Condition: {memory.condition}
-                      </span>
-                    )}
-                  </div>
-                )}
               </div>
 
               {/* Messages */}
@@ -858,29 +787,11 @@ async function send() {
 
               {/* Composer */}
               <div className="mt-auto border-t border-black/10 shrink-0 bg-white pb-[env(safe-area-inset-bottom)]">
-                <div className="px-3 pt-3">
-                  <div className="max-h-[92px] overflow-y-auto overflow-x-hidden pb-2 pr-1">
-                    <div className="flex flex-wrap gap-2">
-                      {QUICK_PICKS.map((label) => (
-                        <button
-                          key={label}
-                          type="button"
-                          onClick={() => pushQuickPick(label)}
-                          className="rounded-full border border-black/10 bg-white px-3 py-1 text-[12px] text-[#047835] hover:bg-black/[0.03] disabled:opacity-60 transition"
-                          disabled={inputDisabled}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
                 <div className="p-3">
                   <div className="flex w-full gap-2">
                     <input
                       className="min-w-0 flex-1 rounded-xl border border-black/10 bg-white px-3 py-3 text-sm outline-none placeholder:text-[#76777B] focus:border-[#047835] disabled:opacity-60"
-                      placeholder={inputDisabled ? "Loading your chat…" : 'Try: "U3400 PVC sales sheet"'}
+                      placeholder={inputDisabled ? "Loading your chat…" : 'Try: "U3400 PVC"'}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       disabled={inputDisabled}
