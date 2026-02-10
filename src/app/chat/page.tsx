@@ -34,13 +34,7 @@ type ChatResponse = {
   error?: string;
 };
 
-type MsgMeta = {
-  type?: "assistant_with_docs";
-  recommendedDocs?: RecommendedDoc[];
-  foldersUsed?: string[];
-};
-
-type Msg = { role: "user" | "assistant"; content: string; meta?: MsgMeta | null };
+type Msg = { role: "user" | "assistant"; content: string };
 
 type ProfileRow = {
   role: "admin" | "anchor_rep" | "external_rep";
@@ -92,42 +86,6 @@ async function readJsonSafely<T = any>(res: Response): Promise<T | null> {
   } catch {
     throw new Error(`Non-JSON response (${res.status}): ${text.slice(0, 200)}`);
   }
-}
-
-function SheetsInline({
-  docs,
-  onOpen,
-}: {
-  docs: RecommendedDoc[];
-  onOpen: (path: string) => void;
-}) {
-  if (!Array.isArray(docs) || docs.length === 0) return null;
-
-  return (
-    <div className="mt-3 rounded-xl border border-black/10 bg-[#F6F7F8] p-3">
-      <div className="text-[12px] font-semibold text-black/70">
-        Recommended sheets
-      </div>
-
-      <div className="mt-2 space-y-2">
-        {docs.map((d, i) => (
-          <button
-            key={`${d.path}-${i}`}
-            type="button"
-            onClick={() => onOpen(d.path)}
-            className="w-full text-left rounded-lg border border-black/10 bg-white px-3 py-2 hover:bg-black/[0.03] transition"
-          >
-            <div className="text-sm font-semibold text-black">{d.title}</div>
-            <div className="text-[11px] text-[#76777B]">{d.doc_type}</div>
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-2 text-[11px] text-[#76777B]">
-        Need more? Use <span className="font-semibold text-black/70">Asset Management</span> for the full library.
-      </div>
-    </div>
-  );
 }
 
 export default function ChatPage() {
@@ -198,15 +156,6 @@ export default function ChatPage() {
     return true;
   }, [isDefaultGreeting, lastAssistantMessage]);
 
-  async function openDoc(path: string) {
-  if (!path) return;
-
-  // ✅ Let the browser handle redirects + file rendering
-  const url = `/api/doc-open?path=${encodeURIComponent(path)}`;
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
-
   const loadConversationMessages = useCallback(
     async (uid: string, cid: string) => {
       setHistoryLoading(true);
@@ -227,12 +176,11 @@ export default function ChatPage() {
           for (const r of rows as any[]) {
             const role = r.role as "user" | "assistant";
             const content = (r.content ?? "").toString();
-            const meta = (r.meta ?? null) as MsgMeta | null;
 
             // skip docs-only blank assistant rows (we don't have docs panel anymore)
             if (role === "assistant" && !content.trim()) continue;
 
-            display.push({ role, content, meta });
+            display.push({ role, content });
           }
 
           setMessages(display as any);
@@ -546,32 +494,26 @@ async function send() {
       return;
     }
 
-    const docs = Array.isArray(data?.recommendedDocs) ? data!.recommendedDocs! : [];
-    const folders = Array.isArray(data?.foldersUsed) ? data!.foldersUsed! : [];
     const sources = Array.isArray(data?.sourcesUsed) ? data!.sourcesUsed! : [];
 
     setLastSources(sources);
     if (data?.sessionId) setSessionId(data.sessionId);
 
     const answerText = (data?.answer ?? "").toString().trim();
-    const meta: MsgMeta | null =
-      docs.length > 0 ? { type: "assistant_with_docs", recommendedDocs: docs, foldersUsed: folders } : null;
 
     if (answerText) {
-  setMessages((m) => [...m, { role: "assistant", content: answerText, meta }]);
-} else if (docs.length > 0) {
-  setMessages((m) => [...m, { role: "assistant", content: "Recommended sheets:", meta }]);
-} else {
-  // ✅ NEW: never allow “no assistant bubble”
-  setMessages((m) => [
-    ...m,
-    {
-      role: "assistant",
-      content:
-        "I didn’t get a response back from the assistant. Try again — and if it keeps happening, tell me what you’re securing + membrane type so I can pull the right folder.",
-    },
-  ]);
-}
+      setMessages((m) => [...m, { role: "assistant", content: answerText }]);
+    } else {
+      // ✅ NEW: never allow “no assistant bubble”
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content:
+            "I didn’t get a response back from the assistant. Try again — and if it keeps happening, tell me what you’re securing + membrane type so I can recommend the right solution.",
+        },
+      ]);
+    }
 
 
     // auto-title
@@ -642,21 +584,6 @@ async function send() {
             >
               Refresh
             </button>
-            {!profileLoading && role === "admin" ? (
-              <button
-                type="button"
-                onClick={goAdmin}
-                className="hidden sm:inline-flex h-9 items-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
-                title="Open admin dashboard"
-              >
-                Admin
-              </button>
-            ) : (
-              <div className="hidden sm:inline-flex rounded-md border border-white/20 bg-white/10 px-2 py-1 text-[11px] text-white/90">
-                {profileLoading ? "…" : roleLabel}
-              </div>
-            )}
-
             <Link
               href="/dashboard"
               className="hidden md:inline-flex h-9 items-center rounded-md border border-white/20 bg-white/10 px-3 text-[12px] font-semibold text-white hover:bg-white/15 transition"
@@ -672,6 +599,7 @@ async function send() {
             >
               Dashboard
             </Link>
+
           </div>
         </div>
       </header>
@@ -690,11 +618,6 @@ async function send() {
                 "sm:rounded-3xl sm:border sm:border-black/10 sm:shadow-sm",
               ].join(" ")}
             >
-              <div className={PANEL_HEADER}>
-                <div className={`text-xs ${MUTED}`}>
-                  Ask like: “U2400 EPDM” or “HVAC unit on TPO”
-                </div>
-              </div>
 
               {/* Messages */}
               <div className={`${PANEL_BODY} ${SOFT_SCROLL} px-4 py-4 bg-transparent`}>
@@ -710,11 +633,6 @@ async function send() {
                       ].join(" ")}
                     >
                       {renderMessageContent(m.content)}
-
-                      {/* ✅ Inline recommended sheets inside assistant bubble */}
-                      {m.role === "assistant" && Array.isArray(m.meta?.recommendedDocs) && (
-                        <SheetsInline docs={m.meta!.recommendedDocs!} onOpen={openDoc} />
-                      )}
                     </div>
                   ))}
 
@@ -791,7 +709,7 @@ async function send() {
                   <div className="flex w-full gap-2">
                     <input
                       className="min-w-0 flex-1 rounded-xl border border-black/10 bg-white px-3 py-3 text-sm outline-none placeholder:text-[#76777B] focus:border-[#047835] disabled:opacity-60"
-                      placeholder={inputDisabled ? "Loading your chat…" : 'Try: "U3400 PVC"'}
+                      placeholder={inputDisabled ? "Loading your chat…" : "Type your question…"}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       disabled={inputDisabled}
@@ -810,10 +728,6 @@ async function send() {
                     >
                       Send
                     </button>
-                  </div>
-
-                  <div className="mt-2 text-[11px] text-[#76777B]">
-                    Tip: include membrane + series (ex: “U2600 SBS Torch”) so I can pull the exact folder.
                   </div>
 
                   {!profileLoading && (

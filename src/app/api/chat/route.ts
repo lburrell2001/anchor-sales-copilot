@@ -28,11 +28,6 @@ type ChatResponse = {
 };
 
 const U_ANCHORS_FOLDER = "anchor/u-anchors";
-const WRAP_UP_PHRASES = [
-  "If you want, I can pull the install and data sheets for this setup.",
-  "I can grab the install + data sheets whenever you’re ready.",
-  "Want me to pull the install and spec sheets for this configuration?",
-];
 const FALLBACK_SYSTEM_PROMPT = `
 You are Anchor Sales Co-Pilot for Anchor Products (commercial rooftop attachment solutions only).
 Reply like a confident sales engineer. Lead with a recommendation, then explain briefly.
@@ -42,14 +37,6 @@ Do NOT provide engineering calculations, spacing, loads, or code guidance.
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-5-mini";
 const FALLBACK_MODEL = process.env.OPENAI_FALLBACK_MODEL || "gpt-4.1-mini";
 
-type DocPreference = "solution" | "anchor_membrane" | "both" | null;
-
-function getOrigin(req: Request) {
-  const h = req.headers;
-  const proto = h.get("x-forwarded-proto") || "https";
-  const host = h.get("x-forwarded-host") || h.get("host");
-  return host ? `${proto}://${host}` : new URL(req.url).origin;
-}
 
 function anchorContact() {
   return "Contact Anchor Products at (888) 575-2131 or visit anchorp.com.";
@@ -204,77 +191,6 @@ function humanizeSolutionLabel(folderHint?: string | null, solution?: CanonicalS
   return map[key] || "rooftop attachment solution";
 }
 
-function detectWrapUp(answerText: string) {
-  // Wrap-up detector: exact-intent phrases required by product rules.
-  const t = String(answerText || "").toLowerCase();
-  return WRAP_UP_PHRASES.some((p) => t.includes(p.toLowerCase()));
-}
-
-function userAskedForDocs(text: string) {
-  return /\b(send|pull|grab|share|provide|email|text|download|get)\b.*\b(sheet|sheets|manual|data\s*sheet|spec\s*sheet|specs|install|documentation|docs|pdf)\b/i.test(
-    text
-  );
-}
-
-function userAgreed(text: string) {
-  return /\b(yes|yep|yeah|sure|ok|okay|please|go ahead|sounds good|do it)\b/i.test(text);
-}
-
-function hasMembrane(text: string) {
-  return /\b(tpo|pvc|epdm|sbs|app|kee|modified|mod[-\s]?bit|coating|silicone|acrylic)\b/i.test(
-    text
-  );
-}
-
-function hasAnchorSeries(text: string) {
-  return /\b(2000[-\s]?series|3000[-\s]?series|series\s*2000|series\s*3000)\b/i.test(text);
-}
-
-function detectDocPreference(text: string): DocPreference {
-  const t = String(text || "").toLowerCase();
-  if (/\bboth\b/.test(t)) return "both";
-  if (/\bsolution\b.*\b(sheet|sheets|docs|documentation)\b/.test(t)) return "solution";
-  if (/\banchor\b.*\bmembrane\b/.test(t)) return "anchor_membrane";
-  if (/\bmembrane[-\s]?specific\b|\banchor[-\s]?membrane\b/.test(t)) return "anchor_membrane";
-  return null;
-}
-
-function isDocRequestOnly(text: string) {
-  const t = String(text || "").toLowerCase().trim();
-  if (!t) return false;
-  return /\b(solution\s*sheets?|install\s*sheet|install\s*manual|data\s*sheet|spec\s*sheet|docs|documentation|pdfs?)\b/.test(
-    t
-  );
-}
-
-function shouldReturnDocs(params: {
-  lastUser: string;
-  transcript: string;
-  answer: string;
-  folderHint?: string;
-  docPreference: DocPreference;
-}) {
-  const { lastUser, transcript, answer, folderHint, docPreference } = params;
-
-  // Docs are returned if the user chose the doc type AND we have a solution folder.
-  const hasSolution = Boolean(folderHint);
-
-  // If the user asked for docs but didn't choose the type, do NOT return yet.
-  if (!docPreference) return false;
-
-  // If we have preference and a solution bucket, return docs now (no extra blocking).
-  if (hasSolution) return true;
-
-  // If user explicitly asked for docs, allow a broader search even if solution isn't resolved yet.
-  if (userAskedForDocs(lastUser)) return true;
-
-  // If current answer contains wrap-up, we still do NOT return docs until the next user turn.
-  if (detectWrapUp(answer)) return false;
-
-  return false;
-}
-
-
 function ensureNonEmptyAnswer(params: {
   answer: string;
   userText: string;
@@ -305,49 +221,6 @@ function normalizeBulletSpacing(answer: string) {
   // Collapse accidental double spaces.
   a = a.replace(/[ \t]{2,}/g, " ");
   return a.trim();
-}
-
-async function fetchDocs(
-  req: Request,
-  opts: {
-    q?: string;
-    folder?: string;
-    limit?: number;
-    page?: number;
-    withText?: boolean;
-    excerptLen?: number;
-    visibility?: "public" | "all";
-  }
-) {
-  const origin = getOrigin(req);
-  const url = new URL(`${origin}/api/docs`);
-
-  if (opts.folder) url.searchParams.set("folder", opts.folder);
-  if (opts.q) url.searchParams.set("q", opts.q);
-  if (opts.visibility) url.searchParams.set("visibility", opts.visibility);
-
-  url.searchParams.set("limit", String(opts.limit ?? 8));
-  url.searchParams.set("page", String(opts.page ?? 0));
-  url.searchParams.set("withText", opts.withText === false ? "0" : "1");
-  url.searchParams.set("excerptLen", String(opts.excerptLen ?? 900));
-
-  const cookie = req.headers.get("cookie") || "";
-  const res = await fetch(url.toString(), { method: "GET", headers: { cookie }, cache: "no-store" });
-  if (!res.ok) return [] as RecommendedDoc[];
-
-  const json = await res.json().catch(() => null);
-  return (json?.docs || []) as RecommendedDoc[];
-}
-
-function buildDocsContext(docs: RecommendedDoc[]) {
-  if (!docs.length) return "";
-  return docs
-    .slice(0, 8)
-    .map((d, i) => {
-      const excerpt = (d.excerpt || "").trim().slice(0, 900);
-      return `[#${i + 1}] ${d.title}\nPath: ${d.path}\nType: ${d.doc_type}\nSnippet: ${excerpt || "(No snippet)"}\n`;
-    })
-    .join("\n---\n");
 }
 
 /**
@@ -404,6 +277,7 @@ Critical guardrails:
 System-wide rules:
 - All anchors are matched based on the roof membrane type (TPO, PVC, EPDM, etc.).
 - Never assume a membrane type. Only state a membrane if the user explicitly provided it.
+- If the user asks for documents, manuals, or specs, direct them to the Asset Management tool.
 - Guy wire kits ONLY use 2000-series anchors.
 - All solutions that use guy wire kits are tie-down solutions.
 - Use conversation context: if the user provides partial info (ex: “TPO roof”), do not reset the conversation.
@@ -570,7 +444,7 @@ export async function POST(req: Request) {
       } satisfies ChatResponse);
     }
 
-    // engineering escalation
+    // engineering escalation (log only; still call OpenAI every time)
     const preEscalate = needsEngineeringEscalation(lastUser);
     if (process.env.LOG_ESCALATION === "true") {
       console.info("[chat] escalation precheck", {
@@ -578,13 +452,6 @@ export async function POST(req: Request) {
         lastUser: lastUser.slice(0, 280),
         model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
       });
-    }
-    if (preEscalate) {
-      return NextResponse.json({
-        answer: `That requires project-specific engineering review. ${anchorContact()}`,
-        foldersUsed: [U_ANCHORS_FOLDER],
-        recommendedDocs: [],
-      } satisfies ChatResponse);
     }
 
     if (!process.env.OPENAI_API_KEY) {
@@ -616,106 +483,11 @@ export async function POST(req: Request) {
 
     const transcript = incoming.map((m) => `${m.role}: ${m.content}`).join("\n");
 
-    // If we can't map to a known Anchor solution, direct to Anchor Products.
-    if (!folderHint) {
-      return NextResponse.json({
-        answer: `That doesn’t map to a known Anchor rooftop attachment solution. ${anchorContact()}`,
-        foldersUsed: [U_ANCHORS_FOLDER],
-        recommendedDocs: [],
-        sessionId: body?.sessionId || undefined,
-        conversationId: body?.conversationId || undefined,
-      } satisfies ChatResponse);
-    }
-
-    const docPreference = detectDocPreference(lastUser) || detectDocPreference(transcript);
-    const shouldDocs = shouldReturnDocs({
-      lastUser,
-      transcript,
-      answer: "",
-      folderHint,
-      docPreference,
-    });
-
-    const membrane = extractMembrane(transcript) || extractMembrane(lastUser);
-    const anchorSeries = extractAnchorSeries(transcript) || extractAnchorSeries(lastUser);
-    const visibility = body?.userType === "external" ? "public" : "all";
-
-    // Docs are only returned when the user asks or the solution is finalized.
-    // This keeps the chat flow conversational and avoids premature attachments.
-    let recommendedDocs: RecommendedDoc[] = [];
-    if (shouldDocs && docPreference) {
-      const suppressQ = isDocRequestOnly(lastUser);
-      if (docPreference === "solution" || docPreference === "both") {
-        const solutionDocs = await fetchDocs(req, {
-          folder: folderHint,
-          q: suppressQ ? undefined : lastUser,
-          limit: 8,
-          withText: true,
-          excerptLen: 900,
-          visibility,
-        });
-        recommendedDocs = recommendedDocs.concat(solutionDocs);
-        if (recommendedDocs.length === 0 && folderHint) {
-          const fallbackSolutionDocs = await fetchDocs(req, {
-            folder: folderHint,
-            q: undefined,
-            limit: 8,
-            withText: true,
-            excerptLen: 900,
-            visibility,
-          });
-          recommendedDocs = recommendedDocs.concat(fallbackSolutionDocs);
-        }
-      }
-      if (docPreference === "anchor_membrane" || docPreference === "both") {
-        const anchorQuery = [anchorSeries, membrane].filter(Boolean).join(" ");
-        const anchorDocs = await fetchDocs(req, {
-          folder: U_ANCHORS_FOLDER,
-          q: anchorQuery || (suppressQ ? undefined : lastUser),
-          limit: 8,
-          withText: true,
-          excerptLen: 900,
-          visibility,
-        });
-        recommendedDocs = recommendedDocs.concat(anchorDocs);
-        if (recommendedDocs.length === 0) {
-          const fallbackAnchorDocs = await fetchDocs(req, {
-            folder: U_ANCHORS_FOLDER,
-            q: anchorQuery || undefined,
-            limit: 8,
-            withText: true,
-            excerptLen: 900,
-            visibility,
-          });
-          recommendedDocs = recommendedDocs.concat(fallbackAnchorDocs);
-        }
-      }
-      // de-dupe by path
-      const seen = new Set<string>();
-      recommendedDocs = recommendedDocs.filter((d) => {
-        if (seen.has(d.path)) return false;
-        seen.add(d.path);
-        return true;
-      });
-    }
-
-    const docsContext = shouldDocs ? buildDocsContext(recommendedDocs) : "";
-
-    const finalized = Boolean(folderHint) && (hasMembrane(transcript) || hasAnchorSeries(transcript));
-    const needsDocChoice = finalized && !docPreference;
-    const askedForDocs = userAskedForDocs(lastUser) || Boolean(docPreference);
     const userPrompt = [
       folderHint ? `Detected storage folder hint: ${folderHint}` : "",
-      // Keep internal docs out of the chat response. We use them for grounding, not verbatim output.
-      docsContext ? `Internal doc snippets (for grounding only; do NOT quote or mention these):\n${docsContext}` : "",
       memoryBlock,
       `Conversation so far:\n${transcript}`,
-      needsDocChoice
-        ? `If the solution is finalized, add this as a final question after the recommendation and bullets: "Want the solution sheets, the membrane-specific anchor sheets, or both?"`
-        : "",
-      askedForDocs
-        ? `The user asked for sheets. If the solution is known, confirm you'll provide them now.`
-        : "",
+      `If the user asks for documents, manuals, or specs, direct them to the Asset Management tool.`,
       `Now answer the user's latest message.`,
     ]
       .filter(Boolean)
@@ -752,7 +524,7 @@ export async function POST(req: Request) {
         answer: answer.slice(0, 280),
       });
     }
-    if (postEscalate) {
+    if (postEscalate || preEscalate) {
       answer = `That requires project-specific engineering review. ${anchorContact()}`;
     }
 
@@ -805,7 +577,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       answer,
       foldersUsed: [U_ANCHORS_FOLDER, ...(folderHint ? [folderHint] : [])],
-      recommendedDocs,
+      recommendedDocs: [],
       sessionId: body?.sessionId || undefined,
       conversationId: body?.conversationId || undefined,
     } satisfies ChatResponse);
