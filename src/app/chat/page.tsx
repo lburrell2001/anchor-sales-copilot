@@ -645,7 +645,7 @@ async function send() {
 }
 
   // Shared UI tokens (Anchor dashboard scheme)
-  const PANEL = "rounded-3xl border border-black/10 bg-white shadow-sm";
+  const PANEL = "bg-white";
   const PANEL_HEADER = "border-b border-black/10 px-4 py-3 shrink-0";
   const PANEL_BODY = "flex-1 min-h-0";
   const SOFT_SCROLL = "overflow-y-auto [scrollbar-width:thin]";
@@ -653,7 +653,7 @@ async function send() {
   const MUTED = "text-[#76777B]";
 
   return (
-    <main className="min-h-[100svh] bg-[#F6F7F8] text-black flex flex-col">
+    <main className="h-[100svh] bg-white sm:bg-[#F6F7F8] text-black flex flex-col overflow-hidden">
       {/* Top bar */}
       <header className="sticky top-0 z-30 bg-[#047835] pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
@@ -724,11 +724,19 @@ async function send() {
       </header>
 
       {/* Body */}
-      <div className="flex-1">
-        <div className="mx-auto max-w-6xl px-4 py-4">
-          <div className="flex flex-col gap-4">
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="mx-auto flex h-full max-w-6xl flex-col px-0 py-0 sm:px-4 sm:py-4">
+          <div className="flex flex-1 flex-col gap-0 sm:gap-4 min-h-0">
             {/* Chat panel */}
-            <section className={[PANEL, "flex flex-col", "h-[calc(100svh-64px)]", "min-h-0"].join(" ")}>
+            <section
+              className={[
+                PANEL,
+                "flex flex-1 flex-col min-h-0",
+                "overflow-hidden",
+                "rounded-none border-0 shadow-none",
+                "sm:rounded-3xl sm:border sm:border-black/10 sm:shadow-sm",
+              ].join(" ")}
+            >
               <div className={PANEL_HEADER}>
                 <div className={`text-xs ${MUTED}`}>
                   Ask like: “U2400 EPDM install manual + data sheet” or “HVAC solution docs”
@@ -849,7 +857,7 @@ async function send() {
               </div>
 
               {/* Composer */}
-              <div className="border-t border-black/10 shrink-0">
+              <div className="mt-auto border-t border-black/10 shrink-0 bg-white pb-[env(safe-area-inset-bottom)]">
                 <div className="px-3 pt-3">
                   <div className="max-h-[92px] overflow-y-auto overflow-x-hidden pb-2 pr-1">
                     <div className="flex flex-wrap gap-2">

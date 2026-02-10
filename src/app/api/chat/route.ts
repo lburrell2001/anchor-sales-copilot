@@ -77,10 +77,16 @@ function sanitizeAnswer(answer: string) {
 }
 
 function containsEngineeringOutput(answer: string) {
-  // Trigger only on explicit engineering specifics (numbers, spacing, torque, schedules).
-  return /\b(\d+(\.\d+)?\s*(psf|lb|lbs|kpa|ft|in|mm)|on center|o\.?c\.?|torque|fastener\s*schedule|fastening\s*schedule|spacing)\b/i.test(
-    answer
-  );
+  // Trigger only on explicit engineering specifics (numbers + units WITH engineering context).
+  const text = String(answer || "");
+  if (/\b(fastener\s*schedule|fastening\s*schedule|o\.?c\.?|on center)\b/i.test(text)) {
+    return true;
+  }
+  const engineeringKeywords =
+    /\b(spacing|layout|pattern|torque|fastener|schedule|design|pressure|uplift|seismic|wind)\b/i;
+  const numericUnits =
+    /\b\d+(\.\d+)?\s*(psf|kpa|mph|lb|lbs|lbf|ft\.?|feet|in\.?|inch|inches|mm|cm)\b/i;
+  return engineeringKeywords.test(text) && numericUnits.test(text);
 }
 
 function needsEngineeringEscalation(text: string) {
@@ -565,7 +571,15 @@ export async function POST(req: Request) {
     }
 
     // engineering escalation
-    if (needsEngineeringEscalation(lastUser)) {
+    const preEscalate = needsEngineeringEscalation(lastUser);
+    if (process.env.LOG_ESCALATION === "true") {
+      console.info("[chat] escalation precheck", {
+        preEscalate,
+        lastUser: lastUser.slice(0, 280),
+        model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
+      });
+    }
+    if (preEscalate) {
       return NextResponse.json({
         answer: `That requires project-specific engineering review. ${anchorContact()}`,
         foldersUsed: [U_ANCHORS_FOLDER],
@@ -731,7 +745,14 @@ export async function POST(req: Request) {
     let answer = sanitizeAnswer(extractedPrimary);
 
     // guardrail
-    if (containsEngineeringOutput(answer)) {
+    const postEscalate = containsEngineeringOutput(answer);
+    if (process.env.LOG_ESCALATION === "true") {
+      console.info("[chat] escalation postcheck", {
+        postEscalate,
+        answer: answer.slice(0, 280),
+      });
+    }
+    if (postEscalate) {
       answer = `That requires project-specific engineering review. ${anchorContact()}`;
     }
 
